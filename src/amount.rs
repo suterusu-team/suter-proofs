@@ -1,4 +1,5 @@
 use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
+use curve25519_dalek::scalar::Scalar;
 use elgamal_ristretto::{Ciphertext, PublicKey, SecretKey};
 
 pub trait Amount {
@@ -14,8 +15,8 @@ impl Amount for u32 {
     // This makes ElGamal encryption additively homomorphic.
     // See also zether paper https://crypto.stanford.edu/~buenz/papers/zether.pdf
     fn encrypt(self, pk: PublicKey) -> Ciphertext {
-        let message = &self.into() * &RISTRETTO_BASEPOINT_POINT;
-        pk.encrypt(message)
+        let s: Scalar = self.into();
+        pk.encrypt(s * RISTRETTO_BASEPOINT_POINT)
     }
 
     // TODO: Brute force currently is the only viable way. Quickcheck shows that this is too slow.
@@ -32,7 +33,7 @@ impl Amount for u32 {
             if acc == point {
                 return Some(i);
             }
-            acc = acc + RISTRETTO_BASEPOINT_POINT;
+            acc += RISTRETTO_BASEPOINT_POINT;
         }
         None
     }
@@ -49,9 +50,7 @@ mod tests {
         let mut csprng = OsRng;
         let sk = SecretKey::new(&mut csprng);
         let pk = PublicKey::from(&sk);
-        let res = u32::decrypt(sk, x.encrypt(pk));
-        println!("The amount decrypted is {:?}", res);
-        res
+        u32::decrypt(sk, x.encrypt(pk))
     }
 
     #[quickcheck]
