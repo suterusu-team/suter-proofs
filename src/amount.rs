@@ -1,8 +1,8 @@
+use super::elgamal::{Ciphertext, PublicKey, SecretKey};
 use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
-use elgamal_ristretto::{Ciphertext, PublicKey, SecretKey};
 
 pub trait Amount {
     type Target;
@@ -46,7 +46,7 @@ impl Amount for u32 {
 mod tests {
     use super::*;
 
-    use elgamal_ristretto::{PublicKey, SecretKey};
+    use crate::elgamal::{PublicKey, SecretKey};
     use rand_core::OsRng;
 
     fn randomly_encrypt_and_decrypt(x: u32) -> Option<u32> {
