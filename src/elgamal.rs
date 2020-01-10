@@ -373,6 +373,12 @@ impl SecretKey {
     }
 }
 
+impl<'a> From<&'a Scalar> for SecretKey {
+    fn from(secret: &'a Scalar) -> SecretKey {
+        SecretKey(*secret)
+    }
+}
+
 // todo: why do we have this?
 impl<'a, 'b> Mul<&'b Scalar> for &'a SecretKey {
     type Output = Scalar;
