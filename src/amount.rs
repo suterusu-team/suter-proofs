@@ -6,19 +6,24 @@ use curve25519_dalek::traits::Identity;
 
 pub trait Amount {
     type Target;
-    fn encrypt(self, pk: PublicKey) -> Ciphertext;
-    fn decrypt(sk: SecretKey, ciphertext: Ciphertext) -> Option<Self::Target>;
+    fn to_point(self) -> RistrettoPoint;
+    fn encrypt_with(self, pk: PublicKey) -> Ciphertext;
+    fn decrypt_from(sk: SecretKey, ciphertext: Ciphertext) -> Option<Self::Target>;
 }
 
 impl Amount for u32 {
     type Target = u32;
 
+    #[inline]
+    fn to_point(self) -> RistrettoPoint {
+        Scalar::from(self) * RISTRETTO_BASEPOINT_POINT
+    }
+
     // Elgamal encryption with balances raised from base point.
     // This makes ElGamal encryption additively homomorphic.
     // See also zether paper https://eprint.iacr.org/2019/191.pdf
-    fn encrypt(self, pk: PublicKey) -> Ciphertext {
-        let s: Scalar = self.into();
-        pk.encrypt(s * RISTRETTO_BASEPOINT_POINT)
+    fn encrypt_with(self, pk: PublicKey) -> Ciphertext {
+        pk.encrypt(self.to_point())
     }
 
     // TODO: Brute force currently is the only viable way.
@@ -29,7 +34,7 @@ impl Amount for u32 {
     // But this tuple is only additively homomorphic in the second and the last componnect.
     // And we need to store the entire transaction history.
     // This seems to be not worthwhile.
-    fn decrypt(sk: SecretKey, ciphertext: Ciphertext) -> Option<Self::Target> {
+    fn decrypt_from(sk: SecretKey, ciphertext: Ciphertext) -> Option<Self::Target> {
         let point = sk.decrypt(ciphertext);
         let mut acc: RistrettoPoint = Identity::identity();
         for i in 0..std::u32::MAX {
@@ -53,12 +58,24 @@ mod tests {
         let mut csprng = OsRng;
         let sk = SecretKey::new(&mut csprng);
         let pk = PublicKey::from(&sk);
-        u32::decrypt(sk, x.encrypt(pk))
+        u32::decrypt_from(sk, x.encrypt_with(pk))
     }
 
     #[quickcheck]
     fn encrypt_and_decrypt_should_be_identity(xs: Vec<u32>) -> bool {
         xs.into_iter()
             .all(|x| x == randomly_encrypt_and_decrypt(x).unwrap())
+    }
+
+    fn fake_encrypt_and_decrypt(x: u32) -> Option<u32> {
+        let sk = SecretKey::from(&Scalar::from(0 as u32));
+        let pk = PublicKey::from(&sk);
+        u32::decrypt_from(sk, x.encrypt_with(pk))
+    }
+
+    #[quickcheck]
+    fn fake_encrypt_and_decrypt_should_be_identity(xs: Vec<u32>) -> bool {
+        xs.into_iter()
+            .all(|x| x == fake_encrypt_and_decrypt(x).unwrap())
     }
 }
