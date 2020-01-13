@@ -1,0 +1,1 @@
+pub(crate) static MERLIN_RANGE_PROOF_LABEL: &[u8] = b"suter_range_proof";
