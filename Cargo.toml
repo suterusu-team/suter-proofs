@@ -10,18 +10,22 @@ edition = "2018"
 elgamal_ristretto = "0.2.1"
 curve25519-dalek = "2.0.0"
 quickcheck = "0.9.0"
-rand = "0.7.2"
+rand = { version = "0.7.2", optional = true }
 rand_core = "0.5.1"
 quickcheck_macros = "0.8.0"
 zkp = "0.7.0"
 sha2 = "0.8.1"
 serde = "1.0.104"
 clear_on_drop = "0.2.3"
-# TODO: use bulletproofs released in crates.io
-# We use this version because conflicting dependencies between zkp and bulletproofs
-bulletproofs = { git = "https://github.com/dalek-cryptography/bulletproofs.git", rev = "3239bc9" }
+bulletproofs = { git = "https://github.com/suterusu-team/bulletproofs.git", rev = "main" }
 merlin = "2.0.0"
 lazy_static = "1.4.0"
+anyhow = "1.0.26"
+thiserror = "1.0.10"
 
 [dev-dependencies]
 bincode = "1.2.1"
+
+[features]
+default = ["std"]
+std = ["rand", "rand/std"]

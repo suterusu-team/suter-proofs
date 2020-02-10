@@ -1,34 +1,25 @@
-use super::constants::MERLIN_RANGE_PROOF_LABEL;
-use bulletproofs::{BulletproofGens, PedersenGens, ProofError, RangeProof};
 use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
-use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
+use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
-use elgamal_ristretto::{ciphertext::Ciphertext, private::SecretKey, public::PublicKey};
-use merlin::Transcript;
 
-lazy_static! {
-    static ref PC_GENS: PedersenGens = PedersenGens::default();
-    static ref BP_GENS: BulletproofGens = BulletproofGens::new(64, 1);
-}
+use crate::{Ciphertext, PublicKey, SecretKey};
 
 pub trait Amount {
     type Target;
+    fn to_u64(self) -> u64;
     fn to_point(self) -> RistrettoPoint;
     fn encrypt_with(self, pk: PublicKey) -> Ciphertext;
     fn try_decrypt_from(sk: SecretKey, ciphertext: Ciphertext) -> Option<Self::Target>;
-    fn create_range_proof(
-        &self,
-        blinding_value: Scalar,
-    ) -> Result<(RangeProof, CompressedRistretto), ProofError>;
-    fn verify_range_proof(
-        proof: &RangeProof,
-        committed_value: &CompressedRistretto,
-    ) -> Result<(), ProofError>;
 }
 
 impl Amount for u32 {
     type Target = u32;
+
+    #[inline]
+    fn to_u64(self) -> u64 {
+        self as u64
+    }
 
     #[inline]
     fn to_point(self) -> RistrettoPoint {
@@ -60,36 +51,6 @@ impl Amount for u32 {
             acc += RISTRETTO_BASEPOINT_POINT;
         }
         None
-    }
-
-    fn create_range_proof(
-        &self,
-        blinding_value: Scalar,
-    ) -> Result<(RangeProof, CompressedRistretto), ProofError> {
-        let secret_value = *self as u64;
-        let mut prover_transcript = Transcript::new(MERLIN_RANGE_PROOF_LABEL);
-        RangeProof::prove_single(
-            &BP_GENS,
-            &PC_GENS,
-            &mut prover_transcript,
-            secret_value,
-            &blinding_value,
-            32,
-        )
-    }
-
-    fn verify_range_proof(
-        proof: &RangeProof,
-        committed_value: &CompressedRistretto,
-    ) -> Result<(), ProofError> {
-        let mut verifier_transcript = Transcript::new(MERLIN_RANGE_PROOF_LABEL);
-        proof.verify_single(
-            &BP_GENS,
-            &PC_GENS,
-            &mut verifier_transcript,
-            committed_value,
-            32,
-        )
     }
 }
 
@@ -123,25 +84,5 @@ mod tests {
     fn fake_encrypt_and_decrypt_should_be_identity(xs: Vec<u32>) -> bool {
         xs.into_iter()
             .all(|x| x == fake_encrypt_and_decrypt(x).unwrap())
-    }
-
-    fn create_range_proof_and_verify(x: u32) -> Result<(), ProofError> {
-        let mut csprng = OsRng;
-        let blinding_value = Scalar::random(&mut csprng);
-        x.create_range_proof(blinding_value)
-            .and_then(|(proof, committed_value)| u32::verify_range_proof(&proof, &committed_value))
-    }
-
-    #[quickcheck]
-    fn create_range_proof_and_verify_should_pass(x: u32) -> Result<(), ProofError> {
-        create_range_proof_and_verify(x)
-    }
-
-    // TODO: This took too long to finish.
-    // #[quickcheck]
-    #[allow(dead_code)]
-    fn create_range_proof_and_verify_should_pass2(xs: Vec<u32>) -> bool {
-        xs.into_iter()
-            .all(|x| create_range_proof_and_verify(x).is_ok())
     }
 }

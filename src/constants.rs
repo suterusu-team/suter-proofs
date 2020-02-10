@@ -1,1 +1,2 @@
-pub(crate) static MERLIN_RANGE_PROOF_LABEL: &[u8] = b"suter_range_proof";
+pub(crate) static MERLIN_CONFIDENTIAL_TRANSACTION_LABEL: &[u8] =
+    b"suter_confidential_transaction_proof";
