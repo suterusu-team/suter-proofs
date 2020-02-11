@@ -1,5 +1,5 @@
-use bulletproofs::{BulletproofGens, PedersenGens, ZetherProof};
-use curve25519_dalek::ristretto::RistrettoPoint;
+use bulletproofs::ZetherProof;
+use curve25519_dalek::ristretto::CompressedRistretto;
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
 #[cfg(feature = "std")]
@@ -10,12 +10,8 @@ use serde::{Deserialize, Serialize};
 use super::amount::Amount;
 use super::constants::MERLIN_CONFIDENTIAL_TRANSACTION_LABEL;
 use super::TransactionError;
+use crate::constants::{BASE_POINT, BP_GENS, PC_GENS};
 use crate::{Ciphertext, PublicKey, SecretKey};
-
-lazy_static! {
-    static ref PC_GENS: PedersenGens = PedersenGens::default();
-    static ref BP_GENS: BulletproofGens = BulletproofGens::new(64, 1);
-}
 
 pub type EncryptedBalance = Ciphertext;
 pub type IndividualTransaction = Ciphertext;
@@ -25,12 +21,11 @@ fn new_individual_transaction(
     value: &u64,
     blinding: &Scalar,
 ) -> IndividualTransaction {
-    let base_point: RistrettoPoint = (*PC_GENS).B;
     Ciphertext {
         pk: *pk,
         points: (
-            Scalar::from(*value) * base_point + blinding * pk.get_point(),
-            blinding * base_point,
+            blinding * *BASE_POINT,
+            Scalar::from(*value) * *BASE_POINT + blinding * pk.get_point(),
         ),
     }
 }
@@ -41,7 +36,7 @@ pub struct Transaction {
     original_balance: EncryptedBalance,
     sender_transaction: IndividualTransaction,
     receiver_transaction: IndividualTransaction,
-    comitments: Vec<RistrettoPoint>,
+    commitments: Vec<CompressedRistretto>,
     proof: ZetherProof,
 }
 
@@ -51,7 +46,7 @@ impl Transaction {
         original_balance: EncryptedBalance,
         sender_transaction: IndividualTransaction,
         receiver_transaction: IndividualTransaction,
-        commitments: Vec<RistrettoPoint>,
+        commitments: Vec<CompressedRistretto>,
         proof: ZetherProof,
     ) -> Self {
         Transaction {
@@ -59,9 +54,20 @@ impl Transaction {
             original_balance: original_balance,
             sender_transaction: sender_transaction,
             receiver_transaction: receiver_transaction,
-            comitments: commitments,
+            commitments: commitments,
             proof: proof,
         }
+    }
+
+    pub fn get_sender_final_balance(&self) -> EncryptedBalance {
+        self.original_balance - self.sender_transaction
+    }
+
+    pub fn get_receiver_final_balance(
+        &self,
+        receiver_original_balance: &EncryptedBalance,
+    ) -> EncryptedBalance {
+        receiver_original_balance + self.receiver_transaction
     }
 }
 
@@ -127,9 +133,10 @@ fn do_create_transaction(
     sk_sender: &Scalar,
     comm_rnd: &Scalar,
 ) -> Result<Transaction, TransactionError> {
+    assert!(blindings.len() == 2);
     let sk = SecretKey::from(*sk_sender);
     let decrypted_balance: u32 =
-        u32::try_decrypt_from(sk, *original_balance).ok_or(TransactionError::Decryption)?;
+        u32::try_decrypt_from(&sk, original_balance).ok_or(TransactionError::Decryption)?;
     let new_balance: u32 = decrypted_balance
         .checked_sub(*value)
         .ok_or(TransactionError::Overflow)?;
@@ -154,13 +161,6 @@ fn do_create_transaction(
         comm_rnd,
     )
     .map_err(TransactionError::BulletProofs)?;
-    let commitments = commitments
-        .iter()
-        .map(|p| {
-            p.decompress()
-                .expect("commitments in zether proof should be able to be decompressed")
-        })
-        .collect();
     Ok(Transaction::new(
         *pk_sender,
         *original_balance,
@@ -169,4 +169,66 @@ fn do_create_transaction(
         commitments,
         proof,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use quickcheck::TestResult;
+    use rand_core::OsRng;
+
+    #[quickcheck]
+    fn transacation_balance_should_be_corrent(
+        sent_balance: u32,
+        sender_initial_balance: u32,
+        receiver_initial_balance: u32,
+    ) -> TestResult {
+        if sent_balance > sender_initial_balance {
+            return TestResult::discard();
+        };
+
+        let sender_final_balance = &sender_initial_balance - &sent_balance;
+        let receiver_final_balance = &receiver_initial_balance + &sent_balance;
+
+        let mut csprng = OsRng;
+        let sk_scalar = Scalar::random(&mut csprng);
+        let sk_sender = SecretKey::from(sk_scalar);
+        let pk_sender = PublicKey::from(&sk_sender);
+        let sk_receiver = SecretKey::new(&mut csprng);
+        let pk_receiver = PublicKey::from(&sk_receiver);
+        let sender_initial_encrypted_balance = sender_initial_balance.encrypt_with(&pk_sender);
+        let receiver_initial_encrypted_balance =
+            receiver_initial_balance.encrypt_with(&pk_receiver);
+
+        let transaction = Transaction::create_transaction(
+            &sender_initial_encrypted_balance,
+            &sent_balance,
+            &pk_sender,
+            &pk_receiver,
+            &sk_scalar,
+        )
+        .expect("Should be able to create transaction");
+
+        assert!(
+            u32::try_decrypt_from(&sk_sender, &transaction.sender_transaction).unwrap()
+                == sent_balance
+        );
+        assert!(
+            u32::try_decrypt_from(&sk_receiver, &transaction.receiver_transaction).unwrap()
+                == sent_balance
+        );
+        assert!(
+            u32::try_decrypt_from(&sk_sender, &transaction.get_sender_final_balance()).unwrap()
+                == sender_final_balance
+        );
+        assert!(
+            u32::try_decrypt_from(
+                &sk_receiver,
+                &transaction.get_receiver_final_balance(&receiver_initial_encrypted_balance)
+            )
+            .unwrap()
+                == receiver_final_balance
+        );
+        TestResult::passed()
+    }
 }

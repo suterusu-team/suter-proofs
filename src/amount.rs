@@ -1,35 +1,35 @@
-use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
 
+use crate::constants::BASE_POINT;
 use crate::{Ciphertext, PublicKey, SecretKey};
 
 pub trait Amount {
     type Target;
-    fn to_u64(self) -> u64;
-    fn to_point(self) -> RistrettoPoint;
-    fn encrypt_with(self, pk: PublicKey) -> Ciphertext;
-    fn try_decrypt_from(sk: SecretKey, ciphertext: Ciphertext) -> Option<Self::Target>;
+    fn to_u64(&self) -> u64;
+    fn to_point(&self) -> RistrettoPoint;
+    fn encrypt_with(&self, pk: &PublicKey) -> Ciphertext;
+    fn try_decrypt_from(sk: &SecretKey, ciphertext: &Ciphertext) -> Option<Self::Target>;
 }
 
 impl Amount for u32 {
     type Target = u32;
 
     #[inline]
-    fn to_u64(self) -> u64 {
-        self as u64
+    fn to_u64(&self) -> u64 {
+        *self as u64
     }
 
     #[inline]
-    fn to_point(self) -> RistrettoPoint {
-        Scalar::from(self) * RISTRETTO_BASEPOINT_POINT
+    fn to_point(&self) -> RistrettoPoint {
+        Scalar::from(*self) * *BASE_POINT
     }
 
     // Elgamal encryption with balances raised from base point.
     // This makes ElGamal encryption additively homomorphic.
     // See also zether paper https://eprint.iacr.org/2019/191.pdf
-    fn encrypt_with(self, pk: PublicKey) -> Ciphertext {
+    fn encrypt_with(&self, pk: &PublicKey) -> Ciphertext {
         pk.encrypt(&self.to_point())
     }
 
@@ -41,14 +41,14 @@ impl Amount for u32 {
     // But this tuple is only additively homomorphic in the second and the last componnect.
     // And we need to store the entire transaction history.
     // This seems to be not worthwhile.
-    fn try_decrypt_from(sk: SecretKey, ciphertext: Ciphertext) -> Option<Self::Target> {
+    fn try_decrypt_from(sk: &SecretKey, ciphertext: &Ciphertext) -> Option<Self::Target> {
         let point = sk.decrypt(&ciphertext);
         let mut acc: RistrettoPoint = Identity::identity();
         for i in 0..std::u32::MAX {
             if acc == point {
                 return Some(i);
             }
-            acc += RISTRETTO_BASEPOINT_POINT;
+            acc += *BASE_POINT;
         }
         None
     }
@@ -65,7 +65,7 @@ mod tests {
         let mut csprng = OsRng;
         let sk = SecretKey::new(&mut csprng);
         let pk = PublicKey::from(&sk);
-        u32::try_decrypt_from(sk, x.encrypt_with(pk))
+        u32::try_decrypt_from(&sk, &x.encrypt_with(&pk))
     }
 
     #[quickcheck]
@@ -77,7 +77,7 @@ mod tests {
     fn fake_encrypt_and_decrypt(x: u32) -> Option<u32> {
         let sk = SecretKey::from(Scalar::from(0 as u32));
         let pk = PublicKey::from(&sk);
-        u32::try_decrypt_from(sk, x.encrypt_with(pk))
+        u32::try_decrypt_from(&sk, &x.encrypt_with(&pk))
     }
 
     #[quickcheck]

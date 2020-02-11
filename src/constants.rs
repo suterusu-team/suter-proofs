@@ -1,2 +1,11 @@
+use bulletproofs::{BulletproofGens, PedersenGens};
+use curve25519_dalek::ristretto::RistrettoPoint;
+
 pub(crate) static MERLIN_CONFIDENTIAL_TRANSACTION_LABEL: &[u8] =
     b"suter_confidential_transaction_proof";
+
+lazy_static! {
+    pub static ref PC_GENS: PedersenGens = PedersenGens::default();
+    pub static ref BP_GENS: BulletproofGens = BulletproofGens::new(64, 2);
+    pub static ref BASE_POINT: RistrettoPoint = (*PC_GENS).B;
+}
