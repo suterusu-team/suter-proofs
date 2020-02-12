@@ -17,7 +17,8 @@ use crate::{Ciphertext, PublicKey, SecretKey};
 pub type EncryptedBalance = Ciphertext;
 pub type IndividualTransaction = Ciphertext;
 
-fn new_ciphertext(pk: &PublicKey, value: &u64, blinding: &Scalar) -> Ciphertext {
+/// Create a ciphertext with the specified plain value and random scalar.
+pub fn new_ciphertext(pk: &PublicKey, value: &u64, blinding: &Scalar) -> Ciphertext {
     let tuple = RistrettoPointTuple {
         random_term: blinding * BASE_POINT,
         payload_term: Scalar::from(*value) * BASE_POINT + blinding * pk.get_point(),
@@ -25,6 +26,7 @@ fn new_ciphertext(pk: &PublicKey, value: &u64, blinding: &Scalar) -> Ciphertext 
     tuple.ciphertext_for(pk)
 }
 
+/// One to one confidential transaction.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Transaction {
     sender: PublicKey,
@@ -36,7 +38,7 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    fn new(
+    pub fn new(
         sender: PublicKey,
         original_balance: EncryptedBalance,
         sender_transaction: IndividualTransaction,
@@ -69,16 +71,20 @@ impl Transaction {
 pub trait ConfidentialTransaction {
     type Amount: Amount;
 
+    /// Create a new transaction from pk_sender which transfers transaction_value to pk_receiver.
+    /// Returned Transaction can be used to calculate the final balance of the sender and receiver.
+    /// The caller must provide original_balance so as to generate a valid proof.
+    /// The caller must not allow race condition of transactions with the same sender.
     fn create_transaction(
         original_balance: &EncryptedBalance,
-        values: &<Self::Amount as Amount>::Target,
+        transaction_value: &<Self::Amount as Amount>::Target,
         pk_sender: &PublicKey,
         pk_receiver: &PublicKey,
         sk_sender: &Scalar,
     ) -> Result<Transaction, TransactionError> {
         Self::create_transaction_with_rng(
             original_balance,
-            values,
+            transaction_value,
             pk_sender,
             pk_receiver,
             sk_sender,
@@ -86,15 +92,17 @@ pub trait ConfidentialTransaction {
         )
     }
 
+    /// Create a new transaction with blindings generated from the given rng.
     fn create_transaction_with_rng<T: RngCore + CryptoRng>(
         original_balance: &EncryptedBalance,
-        values: &<Self::Amount as Amount>::Target,
+        transaction_value: &<Self::Amount as Amount>::Target,
         pk_sender: &PublicKey,
         pk_receiver: &PublicKey,
         sk_sender: &Scalar,
         rng: &mut T,
     ) -> Result<Transaction, TransactionError>;
 
+    /// Verify if a transaction is valid.
     fn verify_transaction(&self) -> Result<(), TransactionError>;
 }
 
@@ -103,7 +111,7 @@ impl ConfidentialTransaction for Transaction {
 
     fn create_transaction_with_rng<T: RngCore + CryptoRng>(
         original_balance: &EncryptedBalance,
-        value: &u32,
+        transaction_value: &u32,
         pk_sender: &PublicKey,
         pk_receiver: &PublicKey,
         sk_sender: &Scalar,
@@ -114,7 +122,7 @@ impl ConfidentialTransaction for Transaction {
         my_debug!(&blindings, &blinding_for_transaction_value);
         do_create_transaction(
             original_balance,
-            value,
+            transaction_value,
             &blindings,
             &blinding_for_transaction_value,
             pk_sender,
@@ -153,19 +161,19 @@ fn generate_transaction_random_parameters<T: RngCore + CryptoRng>(
 
 fn do_create_transaction(
     original_balance: &EncryptedBalance,
-    value: &u32,
+    transaction_value: &u32,
     blindings: &(Scalar, Scalar),
     blinding_for_transaction_value: &Scalar,
     pk_sender: &PublicKey,
     pk_receiver: &PublicKey,
     sk_sender: &Scalar,
 ) -> Result<Transaction, TransactionError> {
-    let sent_balance = *value as u64;
+    let sent_balance = *transaction_value as u64;
     let sk = SecretKey::from(*sk_sender);
     let sender_initial_balance: u32 =
         u32::try_decrypt_from(&sk, original_balance).ok_or(TransactionError::Decryption)?;
     let sender_final_balance = sender_initial_balance
-        .checked_sub(*value)
+        .checked_sub(*transaction_value)
         .ok_or(TransactionError::Overflow)? as u64;
     let sender_transaction =
         new_ciphertext(pk_sender, &sent_balance, blinding_for_transaction_value);
