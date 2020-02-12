@@ -5,6 +5,8 @@ use curve25519_dalek::traits::Identity;
 use crate::constants::BASE_POINT;
 use crate::{Ciphertext, PublicKey, SecretKey};
 
+/// Represents some amount which can be encrypted and decrypted.
+/// Implementors can be viewed as wrappers of target types with encryption and decryption methods.
 pub trait Amount {
     type Target;
     fn to_u64(&self) -> u64;
