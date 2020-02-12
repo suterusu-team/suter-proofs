@@ -23,7 +23,7 @@ impl Amount for u32 {
 
     #[inline]
     fn to_point(&self) -> RistrettoPoint {
-        Scalar::from(*self) * *BASE_POINT
+        Scalar::from(*self) * BASE_POINT
     }
 
     // Elgamal encryption with balances raised from base point.
@@ -48,7 +48,7 @@ impl Amount for u32 {
             if acc == point {
                 return Some(i);
             }
-            acc += *BASE_POINT;
+            acc += BASE_POINT;
         }
         None
     }

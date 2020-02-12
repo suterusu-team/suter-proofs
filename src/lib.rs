@@ -16,3 +16,4 @@ pub mod confidential;
 pub mod constants;
 mod errors;
 pub use errors::TransactionError;
+pub(crate) mod utils;
