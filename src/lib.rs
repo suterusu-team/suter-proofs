@@ -9,6 +9,8 @@ extern crate quickcheck_macros;
 
 pub use elgamal_ristretto::{ciphertext::Ciphertext, private::SecretKey, public::PublicKey};
 
+#[macro_use]
+mod macros;
 pub mod amount;
 pub mod confidential;
 pub mod constants;
