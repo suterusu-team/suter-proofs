@@ -18,10 +18,10 @@ pub type EncryptedBalance = Ciphertext;
 pub type IndividualTransaction = Ciphertext;
 
 /// Create a ciphertext with the specified plain value and random scalar.
-pub fn new_ciphertext(pk: &PublicKey, value: &u64, blinding: &Scalar) -> Ciphertext {
+pub fn new_ciphertext(pk: &PublicKey, value: u64, blinding: &Scalar) -> Ciphertext {
     let tuple = RistrettoPointTuple {
         random_term: blinding * BASE_POINT,
-        payload_term: Scalar::from(*value) * BASE_POINT + blinding * pk.get_point(),
+        payload_term: Scalar::from(value) * BASE_POINT + blinding * pk.get_point(),
     };
     tuple.ciphertext_for(pk)
 }
@@ -77,7 +77,7 @@ pub trait ConfidentialTransaction {
     /// The caller must not allow race condition of transactions with the same sender.
     fn create_transaction(
         original_balance: &EncryptedBalance,
-        transaction_value: &<Self::Amount as Amount>::Target,
+        transaction_value: <Self::Amount as Amount>::Target,
         pk_sender: &PublicKey,
         pk_receiver: &PublicKey,
         sk_sender: &Scalar,
@@ -95,7 +95,7 @@ pub trait ConfidentialTransaction {
     /// Create a new transaction with blindings generated from the given rng.
     fn create_transaction_with_rng<T: RngCore + CryptoRng>(
         original_balance: &EncryptedBalance,
-        transaction_value: &<Self::Amount as Amount>::Target,
+        transaction_value: <Self::Amount as Amount>::Target,
         pk_sender: &PublicKey,
         pk_receiver: &PublicKey,
         sk_sender: &Scalar,
@@ -111,7 +111,7 @@ impl ConfidentialTransaction for Transaction {
 
     fn create_transaction_with_rng<T: RngCore + CryptoRng>(
         original_balance: &EncryptedBalance,
-        transaction_value: &u32,
+        transaction_value: u32,
         pk_sender: &PublicKey,
         pk_receiver: &PublicKey,
         sk_sender: &Scalar,
@@ -161,31 +161,31 @@ fn generate_transaction_random_parameters<T: RngCore + CryptoRng>(
 
 fn do_create_transaction(
     original_balance: &EncryptedBalance,
-    transaction_value: &u32,
+    transaction_value: u32,
     blindings: &(Scalar, Scalar),
     blinding_for_transaction_value: &Scalar,
     pk_sender: &PublicKey,
     pk_receiver: &PublicKey,
     sk_sender: &Scalar,
 ) -> Result<Transaction, TransactionError> {
-    let sent_balance = *transaction_value as u64;
+    let sent_balance = transaction_value as u64;
     let sk = SecretKey::from(*sk_sender);
     let sender_initial_balance: u32 =
         u32::try_decrypt_from(&sk, original_balance).ok_or(TransactionError::Decryption)?;
     let sender_final_balance = sender_initial_balance
-        .checked_sub(*transaction_value)
+        .checked_sub(transaction_value)
         .ok_or(TransactionError::Overflow)? as u64;
     let sender_transaction =
-        new_ciphertext(pk_sender, &sent_balance, blinding_for_transaction_value);
+        new_ciphertext(pk_sender, sent_balance, blinding_for_transaction_value);
     let receiver_transaction =
-        new_ciphertext(pk_receiver, &sent_balance, blinding_for_transaction_value);
+        new_ciphertext(pk_receiver, sent_balance, blinding_for_transaction_value);
     let sender_final_encrypted_balance = original_balance - sender_transaction;
     let mut prover_transcript = Transcript::new(MERLIN_CONFIDENTIAL_TRANSACTION_LABEL);
     let (proof, commitments) = ZetherProof::prove_multiple(
         &BP_GENS,
         &PC_GENS,
         &mut prover_transcript,
-        &vec![sent_balance, sender_final_balance],
+        &[sent_balance, sender_final_balance],
         &[blindings.0, blindings.1],
         32,
         &pk_sender.get_point(),
@@ -223,7 +223,7 @@ mod tests {
         // TODO: u32 takes too long to finish.
         let value = csprng.next_u32() as u16;
         let blinding = Scalar::random(&mut csprng);
-        let ciphertext = new_ciphertext(&pk, &(value as u64), &blinding);
+        let ciphertext = new_ciphertext(&pk, value as u64, &blinding);
         assert!(u32::try_decrypt_from(&sk, &ciphertext).unwrap() == value as u32)
     }
 
@@ -249,14 +249,14 @@ mod tests {
         let sender_initial_balance_blinding = Scalar::random(&mut csprng);
         let sender_initial_encrypted_balance = new_ciphertext(
             &pk_sender,
-            &(sender_initial_balance as u64),
+            sender_initial_balance as u64,
             &sender_initial_balance_blinding,
         );
         let receiver_initial_balance = csprng.next_u32();
         let receiver_initial_balance_blinding = Scalar::random(&mut csprng);
         let receiver_initial_encrypted_balance = new_ciphertext(
             &pk_receiver,
-            &(receiver_initial_balance as u64),
+            receiver_initial_balance as u64,
             &receiver_initial_balance_blinding,
         );
 
@@ -299,7 +299,7 @@ mod tests {
 
         let transaction = Transaction::create_transaction_with_rng(
             &sender_initial_encrypted_balance,
-            &sent_balance,
+            sent_balance,
             &pk_sender,
             &pk_receiver,
             &sk_scalar,
@@ -335,7 +335,7 @@ mod tests {
 
         let transaction = Transaction::create_transaction(
             &sender_initial_encrypted_balance,
-            &sent_balance,
+            sent_balance,
             &pk_sender,
             &pk_receiver,
             &sk_scalar,
