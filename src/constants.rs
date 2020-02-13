@@ -9,6 +9,5 @@ pub const BASE_POINT: RistrettoPoint = RISTRETTO_BASEPOINT_POINT;
 
 lazy_static! {
     pub static ref PC_GENS: PedersenGens = PedersenGens::default();
-    pub static ref BP_GENS: BulletproofGens = BulletproofGens::new(64, 2);
-    // pub static ref BASE_POINT: RistrettoPoint = (*PC_GENS).B;
+    pub static ref BP_GENS: BulletproofGens = BulletproofGens::new(64, 8);
 }
