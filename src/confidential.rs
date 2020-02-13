@@ -71,22 +71,20 @@ impl Transaction {
 pub trait ConfidentialTransaction {
     type Amount: Amount;
 
-    /// Create a new transaction from pk_sender which transfers transaction_value to pk_receiver.
+    /// Create a new transaction from pk_sender which transfers transfer_intention.1 to transfer_intention.0.
     /// Returned Transaction can be used to calculate the final balance of the sender and receiver.
     /// The caller must provide original_balance so as to generate a valid proof.
     /// The caller must not allow race condition of transactions with the same sender.
     fn create_transaction(
         original_balance: &EncryptedBalance,
-        transaction_value: <Self::Amount as Amount>::Target,
+        transfer_intention: &(PublicKey, <Self::Amount as Amount>::Target),
         pk_sender: &PublicKey,
-        pk_receiver: &PublicKey,
         sk_sender: &Scalar,
     ) -> Result<Transaction, TransactionError> {
         Self::create_transaction_with_rng(
             original_balance,
-            transaction_value,
+            transfer_intention,
             pk_sender,
-            pk_receiver,
             sk_sender,
             &mut thread_rng(),
         )
@@ -95,9 +93,8 @@ pub trait ConfidentialTransaction {
     /// Create a new transaction with blindings generated from the given rng.
     fn create_transaction_with_rng<T: RngCore + CryptoRng>(
         original_balance: &EncryptedBalance,
-        transaction_value: <Self::Amount as Amount>::Target,
+        transfer_intention: &(PublicKey, <Self::Amount as Amount>::Target),
         pk_sender: &PublicKey,
-        pk_receiver: &PublicKey,
         sk_sender: &Scalar,
         rng: &mut T,
     ) -> Result<Transaction, TransactionError>;
@@ -111,12 +108,12 @@ impl ConfidentialTransaction for Transaction {
 
     fn create_transaction_with_rng<T: RngCore + CryptoRng>(
         original_balance: &EncryptedBalance,
-        transaction_value: u32,
+        transfer_intention: &(PublicKey, <Self::Amount as Amount>::Target),
         pk_sender: &PublicKey,
-        pk_receiver: &PublicKey,
         sk_sender: &Scalar,
         rng: &mut T,
     ) -> Result<Transaction, TransactionError> {
+        let (ref pk_receiver, transaction_value) = *transfer_intention;
         let (blindings, blinding_for_transaction_value) =
             generate_transaction_random_parameters(rng);
         my_debug!(&blindings, &blinding_for_transaction_value);
@@ -168,24 +165,27 @@ fn do_create_transaction(
     pk_receiver: &PublicKey,
     sk_sender: &Scalar,
 ) -> Result<Transaction, TransactionError> {
-    let sent_balance = transaction_value as u64;
     let sk = SecretKey::from(*sk_sender);
     let sender_initial_balance: u32 =
         u32::try_decrypt_from(&sk, original_balance).ok_or(TransactionError::Decryption)?;
     let sender_final_balance = sender_initial_balance
         .checked_sub(transaction_value)
         .ok_or(TransactionError::Overflow)? as u64;
+    let transaction_value = transaction_value as u64;
     let sender_transaction =
-        new_ciphertext(pk_sender, sent_balance, blinding_for_transaction_value);
-    let receiver_transaction =
-        new_ciphertext(pk_receiver, sent_balance, blinding_for_transaction_value);
+        new_ciphertext(pk_sender, transaction_value, blinding_for_transaction_value);
+    let receiver_transaction = new_ciphertext(
+        pk_receiver,
+        transaction_value,
+        blinding_for_transaction_value,
+    );
     let sender_final_encrypted_balance = original_balance - sender_transaction;
     let mut prover_transcript = Transcript::new(MERLIN_CONFIDENTIAL_TRANSACTION_LABEL);
     let (proof, commitments) = ZetherProof::prove_multiple(
         &BP_GENS,
         &PC_GENS,
         &mut prover_transcript,
-        &[sent_balance, sender_final_balance],
+        &[transaction_value, sender_final_balance],
         &[blindings.0, blindings.1],
         32,
         &pk_sender.get_point(),
@@ -212,7 +212,7 @@ mod tests {
     use super::*;
     use quickcheck::TestResult;
     use rand_chacha::ChaCha20Rng;
-    use rand_core::{OsRng, SeedableRng};
+    use rand_core::{OsRng, RngCore, SeedableRng};
 
     #[quickcheck]
     fn new_ciphertext_should_work(seed: u64) {
@@ -244,8 +244,8 @@ mod tests {
         let pk_receiver = PublicKey::from(&sk_receiver);
         // TODO: u32 takes too long to finish.
         let sender_final_balance = (csprng.next_u32() as u16) as u32;
-        let sent_balance = (csprng.next_u32() as u16) as u32;
-        let sender_initial_balance = sender_final_balance + sent_balance;
+        let transaction_value = (csprng.next_u32() as u16) as u32;
+        let sender_initial_balance = sender_final_balance + transaction_value;
         let sender_initial_balance_blinding = Scalar::random(&mut csprng);
         let sender_initial_encrypted_balance = new_ciphertext(
             &pk_sender,
@@ -268,7 +268,7 @@ mod tests {
                 sender_initial_balance_blinding,
                 sender_initial_encrypted_balance,
                 sender_final_balance,
-                sent_balance,
+                transaction_value,
             ),
             (
                 receiver_initial_balance,
@@ -288,7 +288,7 @@ mod tests {
                 _sender_initial_balance_blinding,
                 sender_initial_encrypted_balance,
                 _sender_final_balance,
-                sent_balance,
+                transaction_value,
             ),
             (
                 _receiver_initial_balance,
@@ -299,9 +299,8 @@ mod tests {
 
         let transaction = Transaction::create_transaction_with_rng(
             &sender_initial_encrypted_balance,
-            sent_balance,
+            &(pk_receiver, transaction_value),
             &pk_sender,
-            &pk_receiver,
             &sk_scalar,
             &mut csprng,
         )
@@ -312,16 +311,16 @@ mod tests {
 
     #[quickcheck]
     fn transacation_balance_should_be_corrent(
-        sent_balance: u32,
+        transaction_value: u32,
         sender_initial_balance: u32,
         receiver_initial_balance: u32,
     ) -> TestResult {
-        if sent_balance > sender_initial_balance {
+        if transaction_value > sender_initial_balance {
             return TestResult::discard();
         };
 
-        let sender_final_balance = &sender_initial_balance - &sent_balance;
-        let receiver_final_balance = &receiver_initial_balance + &sent_balance;
+        let sender_final_balance = &sender_initial_balance - &transaction_value;
+        let receiver_final_balance = &receiver_initial_balance + &transaction_value;
 
         let mut csprng = OsRng;
         let sk_scalar = Scalar::random(&mut csprng);
@@ -335,32 +334,31 @@ mod tests {
 
         let transaction = Transaction::create_transaction(
             &sender_initial_encrypted_balance,
-            sent_balance,
+            &(pk_receiver, transaction_value),
             &pk_sender,
-            &pk_receiver,
             &sk_scalar,
         )
         .expect("Should be able to create transaction");
 
-        assert!(
-            u32::try_decrypt_from(&sk_sender, &transaction.sender_transaction).unwrap()
-                == sent_balance
+        assert_eq!(
+            u32::try_decrypt_from(&sk_sender, &transaction.sender_transaction).unwrap(),
+            transaction_value
         );
-        assert!(
-            u32::try_decrypt_from(&sk_receiver, &transaction.receiver_transaction).unwrap()
-                == sent_balance
+        assert_eq!(
+            u32::try_decrypt_from(&sk_receiver, &transaction.receiver_transaction).unwrap(),
+            transaction_value
         );
-        assert!(
-            u32::try_decrypt_from(&sk_sender, &transaction.get_sender_final_balance()).unwrap()
-                == sender_final_balance
+        assert_eq!(
+            u32::try_decrypt_from(&sk_sender, &transaction.get_sender_final_balance()).unwrap(),
+            sender_final_balance
         );
-        assert!(
+        assert_eq!(
             u32::try_decrypt_from(
                 &sk_receiver,
                 &transaction.get_receiver_final_balance(&receiver_initial_encrypted_balance)
             )
-            .unwrap()
-                == receiver_final_balance
+            .unwrap(),
+            receiver_final_balance
         );
         TestResult::passed()
     }
