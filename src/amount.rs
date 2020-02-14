@@ -7,11 +7,14 @@ use curve25519_dalek::traits::Identity;
 use crate::constants::BASE_POINT;
 use crate::{Ciphertext, PublicKey, SecretKey};
 
-/// Represents some amount which can be encrypted and decrypted.
-/// Implementors can be viewed as wrappers of target types with encryption and decryption methods.
-pub trait Amount {
+/// Represents some amount of type {u8,u16,u32,u64} which can be encrypted and decrypted.
+/// This trait can be viewed as a wrapper to target types.
+/// private::Sealed is used to prevent any other types from implementing Amount.
+/// See https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed
+pub trait Amount: private::Sealed {
     type Target: Copy + Integer + CheckedAdd + CheckedSub + Into<u64>;
 
+    /// Get the inner data of this wrapper.
     fn inner(&self) -> <Self as Amount>::Target;
 
     fn to_u64(&self) -> u64 {
@@ -28,6 +31,14 @@ pub trait Amount {
         sk: &SecretKey,
         ciphertext: &Ciphertext,
     ) -> Option<<Self as Amount>::Target>;
+}
+
+mod private {
+    pub trait Sealed {}
+    impl Sealed for u8 {}
+    impl Sealed for u16 {}
+    impl Sealed for u32 {}
+    impl Sealed for u64 {}
 }
 
 macro_rules! impl_amount {
