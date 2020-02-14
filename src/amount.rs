@@ -30,44 +30,53 @@ pub trait Amount {
     ) -> Option<<Self as Amount>::Target>;
 }
 
-impl Amount for u32 {
-    type Target = u32;
+macro_rules! impl_amount {
+    ( $t:ty, $max:expr ) => {
+        impl Amount for $t {
+            type Target = $t;
 
-    #[inline]
-    fn inner(&self) -> <Self as Amount>::Target {
-        *self
-    }
-
-    // Elgamal encryption with balances raised from base point.
-    // This makes ElGamal encryption additively homomorphic.
-    // See also zether paper https://eprint.iacr.org/2019/191.pdf
-    fn encrypt_with(&self, pk: &PublicKey) -> Ciphertext {
-        pk.encrypt(&self.to_point())
-    }
-
-    // TODO: Brute force currently is the only viable way.
-    // Let $g$ be the base point, $y$ be the public key of the reciever,
-    // $f$ be a mapping from scalar to the group, $m$ be the amount of money ransferred,
-    // maybe we should store $(f(m)*y^r, g^m*y^r, g^r)$ as ciphertext.
-    // This way the reciever is able to recover plaintext with his secret key.
-    // But this tuple is only additively homomorphic in the second and the last componnect.
-    // And we need to store the entire transaction history.
-    // This seems to be not worthwhile.
-    fn try_decrypt_from(
-        sk: &SecretKey,
-        ciphertext: &Ciphertext,
-    ) -> Option<<Self as Amount>::Target> {
-        let point = sk.decrypt(&ciphertext);
-        let mut acc: RistrettoPoint = Identity::identity();
-        for i in 0..std::u32::MAX {
-            if acc == point {
-                return Some(i);
+            #[inline]
+            fn inner(&self) -> <Self as Amount>::Target {
+                *self
             }
-            acc += BASE_POINT;
+
+            // Elgamal encryption with balances raised from base point.
+            // This makes ElGamal encryption additively homomorphic.
+            // See also zether paper https://eprint.iacr.org/2019/191.pdf
+            fn encrypt_with(&self, pk: &PublicKey) -> Ciphertext {
+                pk.encrypt(&self.to_point())
+            }
+
+            // TODO: Brute force currently is the only viable way.
+            // Let $g$ be the base point, $y$ be the public key of the reciever,
+            // $f$ be a mapping from scalar to the group, $m$ be the amount of money ransferred,
+            // maybe we should store $(f(m)*y^r, g^m*y^r, g^r)$ as ciphertext.
+            // This way the reciever is able to recover plaintext with his secret key.
+            // But this tuple is only additively homomorphic in the second and the last componnect.
+            // And we need to store the entire transaction history.
+            // This seems to be not worthwhile.
+            fn try_decrypt_from(
+                sk: &SecretKey,
+                ciphertext: &Ciphertext,
+            ) -> Option<<Self as Amount>::Target> {
+                let point = sk.decrypt(&ciphertext);
+                let mut acc: RistrettoPoint = Identity::identity();
+                for i in 0..$max {
+                    if acc == point {
+                        return Some(i);
+                    }
+                    acc += BASE_POINT;
+                }
+                None
+            }
         }
-        None
-    }
+    };
 }
+
+impl_amount!(u8, std::u8::MAX);
+impl_amount!(u16, std::u16::MAX);
+impl_amount!(u32, std::u32::MAX);
+impl_amount!(u64, std::u64::MAX);
 
 #[cfg(test)]
 mod tests {
