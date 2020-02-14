@@ -1,7 +1,10 @@
+use std::marker::PhantomData;
+
 use bulletproofs::{BatchZetherProof, ZetherProof};
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
+use num::CheckedSub;
 #[cfg(feature = "std")]
 use rand::thread_rng;
 use rand_core::{CryptoRng, RngCore};
@@ -34,15 +37,16 @@ pub enum Proof {
 
 /// One to one confidential transaction.
 #[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct Transaction {
+pub struct Transaction<A: Amount> {
     sender: PublicKey,
     original_balance: EncryptedBalance,
     transfers: Vec<(EncryptedBalance, EncryptedBalance)>,
     commitments: Vec<CompressedRistretto>,
     proof: Proof,
+    _phantom: PhantomData<A>,
 }
 
-impl Transaction {
+impl<A: Amount> Transaction<A> {
     fn new(
         sender: PublicKey,
         original_balance: EncryptedBalance,
@@ -56,6 +60,7 @@ impl Transaction {
             transfers,
             commitments,
             proof,
+            _phantom: PhantomData,
         }
     }
 
@@ -125,7 +130,7 @@ pub trait ConfidentialTransaction {
         transfers: &[(PublicKey, <Self::Amount as Amount>::Target)],
         pk_sender: &PublicKey,
         sk_sender: &Scalar,
-    ) -> Result<Transaction, TransactionError> {
+    ) -> Result<Transaction<Self::Amount>, TransactionError> {
         Self::create_transaction_with_rng(
             original_balance,
             transfers,
@@ -142,14 +147,14 @@ pub trait ConfidentialTransaction {
         pk_sender: &PublicKey,
         sk_sender: &Scalar,
         rng: &mut T,
-    ) -> Result<Transaction, TransactionError>;
+    ) -> Result<Transaction<Self::Amount>, TransactionError>;
 
     /// Verify if a transaction is valid.
     fn verify_transaction(&self) -> Result<(), TransactionError>;
 }
 
-impl ConfidentialTransaction for Transaction {
-    type Amount = u32;
+impl<A: Amount> ConfidentialTransaction for Transaction<A> {
+    type Amount = A;
 
     fn create_transaction_with_rng<T: RngCore + CryptoRng>(
         original_balance: &EncryptedBalance,
@@ -157,7 +162,7 @@ impl ConfidentialTransaction for Transaction {
         pk_sender: &PublicKey,
         sk_sender: &Scalar,
         rng: &mut T,
-    ) -> Result<Transaction, TransactionError> {
+    ) -> Result<Transaction<A>, TransactionError> {
         let num_of_transfers = transfers.len();
         if num_of_transfers == 0 {
             return Err(TransactionError::EmptyTransfers);
@@ -165,7 +170,7 @@ impl ConfidentialTransaction for Transaction {
         let (blindings, blinding_for_transaction_value) =
             generate_transaction_random_parameters(rng, num_of_transfers + 1);
         my_debug!(&blindings, &blinding_for_transaction_value);
-        do_create_transaction(
+        do_create_transaction::<Self::Amount>(
             original_balance,
             transfers,
             &blindings,
@@ -254,36 +259,45 @@ fn generate_transaction_random_parameters<T: RngCore + CryptoRng>(
     )
 }
 
-fn do_create_transaction(
+fn do_create_transaction<A: Amount>(
     original_balance: &EncryptedBalance,
-    transfers: &[(PublicKey, u32)],
+    transfers: &[(PublicKey, <A as Amount>::Target)],
     blindings: &[Scalar],
     blinding_for_transaction_value: &Scalar,
     pk_sender: &PublicKey,
     sk_sender: &Scalar,
-) -> Result<Transaction, TransactionError> {
+) -> Result<Transaction<A>, TransactionError> {
     // Must have transfers
     assert!(!transfers.is_empty());
     // Blindings includes blindings for transfer value, and blinding for final value.
     assert_eq!(transfers.len() + 1, blindings.len());
 
     let sk = SecretKey::from(*sk_sender);
-    let mut values_to_commit: Vec<u64> = transfers.iter().map(|(_pk, v)| (*v as u64)).collect();
-    let sender_initial_balance: u32 =
-        u32::try_decrypt_from(&sk, original_balance).ok_or(TransactionError::Decryption)?;
-    let sender_final_balance = transfers
+    let mut values_to_commit: Vec<u64> = transfers
         .iter()
-        .try_fold(sender_initial_balance, |acc, &(_pk, v)| acc.checked_sub(v))
+        .map(|(_pk, v)| (Into::<u64>::into(*v)))
+        .collect();
+    let sender_initial_balance: A::Target =
+        A::try_decrypt_from(&sk, original_balance).ok_or(TransactionError::Decryption)?;
+    let sender_final_balance: <A as Amount>::Target = transfers
+        .iter()
+        .try_fold(sender_initial_balance, |acc, &(_pk, v)| acc.checked_sub(&v))
         .ok_or(TransactionError::Overflow)?;
-    values_to_commit.push(sender_final_balance as u64);
+    values_to_commit.push(sender_final_balance.into());
     let pk_receivers: Vec<PublicKey> = transfers.iter().map(|(pk, _v)| *pk).collect();
     let sender_transactions: Vec<Ciphertext> = transfers
         .iter()
-        .map(|(_, v)| new_ciphertext(pk_sender, *v as u64, blinding_for_transaction_value))
+        .map(|(_, v)| {
+            new_ciphertext(
+                pk_sender,
+                Into::<u64>::into(*v),
+                blinding_for_transaction_value,
+            )
+        })
         .collect();
     let receiver_transactions: Vec<Ciphertext> = transfers
         .iter()
-        .map(|(pk, v)| new_ciphertext(pk, *v as u64, blinding_for_transaction_value))
+        .map(|(pk, v)| new_ciphertext(pk, Into::<u64>::into(*v), blinding_for_transaction_value))
         .collect();
     let sender_final_encrypted_balance = sender_transactions
         .iter()
@@ -437,7 +451,7 @@ mod tests {
             ),
         ) = setup_from_seed(seed);
 
-        let transaction = Transaction::create_transaction_with_rng(
+        let transaction = Transaction::<u32>::create_transaction_with_rng(
             &sender_initial_encrypted_balance,
             &[(pk_receiver, transaction_value)],
             &pk_sender,
@@ -472,7 +486,7 @@ mod tests {
         let receiver_initial_encrypted_balance =
             receiver_initial_balance.encrypt_with(&pk_receiver);
 
-        let transaction = Transaction::create_transaction(
+        let transaction = Transaction::<u32>::create_transaction(
             &sender_initial_encrypted_balance,
             &[(pk_receiver, transaction_value)],
             &pk_sender,

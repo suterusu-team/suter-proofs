@@ -1,3 +1,5 @@
+use num::{CheckedAdd, CheckedSub, Integer};
+
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
@@ -8,24 +10,32 @@ use crate::{Ciphertext, PublicKey, SecretKey};
 /// Represents some amount which can be encrypted and decrypted.
 /// Implementors can be viewed as wrappers of target types with encryption and decryption methods.
 pub trait Amount {
-    type Target;
-    fn to_u64(&self) -> u64;
-    fn to_point(&self) -> RistrettoPoint;
+    type Target: Copy + Integer + CheckedAdd + CheckedSub + Into<u64>;
+
+    fn inner(&self) -> <Self as Amount>::Target;
+
+    fn to_u64(&self) -> u64 {
+        self.inner().into()
+    }
+
+    fn to_point(&self) -> RistrettoPoint {
+        Scalar::from(self.to_u64()) * BASE_POINT
+    }
+
     fn encrypt_with(&self, pk: &PublicKey) -> Ciphertext;
-    fn try_decrypt_from(sk: &SecretKey, ciphertext: &Ciphertext) -> Option<Self::Target>;
+
+    fn try_decrypt_from(
+        sk: &SecretKey,
+        ciphertext: &Ciphertext,
+    ) -> Option<<Self as Amount>::Target>;
 }
 
 impl Amount for u32 {
     type Target = u32;
 
     #[inline]
-    fn to_u64(&self) -> u64 {
-        *self as u64
-    }
-
-    #[inline]
-    fn to_point(&self) -> RistrettoPoint {
-        Scalar::from(*self) * BASE_POINT
+    fn inner(&self) -> <Self as Amount>::Target {
+        *self
     }
 
     // Elgamal encryption with balances raised from base point.
@@ -43,7 +53,10 @@ impl Amount for u32 {
     // But this tuple is only additively homomorphic in the second and the last componnect.
     // And we need to store the entire transaction history.
     // This seems to be not worthwhile.
-    fn try_decrypt_from(sk: &SecretKey, ciphertext: &Ciphertext) -> Option<Self::Target> {
+    fn try_decrypt_from(
+        sk: &SecretKey,
+        ciphertext: &Ciphertext,
+    ) -> Option<<Self as Amount>::Target> {
         let point = sk.decrypt(&ciphertext);
         let mut acc: RistrettoPoint = Identity::identity();
         for i in 0..std::u32::MAX {
