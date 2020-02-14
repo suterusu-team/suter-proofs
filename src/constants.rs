@@ -7,7 +7,10 @@ pub(crate) static MERLIN_CONFIDENTIAL_TRANSACTION_LABEL: &[u8] =
 
 pub const BASE_POINT: RistrettoPoint = RISTRETTO_BASEPOINT_POINT;
 
+pub static MAX_BITS: usize = 64;
+pub static MAX_PARTIES: usize = 8;
+
 lazy_static! {
     pub static ref PC_GENS: PedersenGens = PedersenGens::default();
-    pub static ref BP_GENS: BulletproofGens = BulletproofGens::new(64, 8);
+    pub static ref BP_GENS: BulletproofGens = BulletproofGens::new(MAX_BITS, MAX_PARTIES);
 }
