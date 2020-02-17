@@ -215,7 +215,7 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
                         &PC_GENS,
                         &mut verifier_transcript,
                         &self.commitments,
-                        32,
+                        A::bit_size(),
                         &self.sender_pk_point(),
                         &self
                             .receiver_pks_points()
@@ -245,7 +245,7 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
                         &PC_GENS,
                         &mut verifier_transcript,
                         &self.commitments,
-                        32,
+                        A::bit_size(),
                         &self.sender_pk_point(),
                         &self.receiver_pks_points(),
                         &ciphertext_points_random_term_last(
@@ -385,46 +385,76 @@ fn do_create_transaction<A: Amount>(
 mod tests {
     use super::*;
     use quickcheck::TestResult;
+    use rand::distributions::{Distribution, Standard};
     use rand::Rng;
     use rand_chacha::ChaCha20Rng;
     use rand_core::{OsRng, SeedableRng};
 
-    #[quickcheck]
-    fn new_ciphertext_should_work(seed: u64) {
+    fn new_ciphertext_should_work<T>(seed: u64)
+    where
+        T: Amount,
+        Standard: Distribution<T>,
+    {
         let mut csprng: ChaCha20Rng = SeedableRng::seed_from_u64(seed);
         let sk_scalar = Scalar::random(&mut csprng);
         let sk = SecretKey::from(sk_scalar);
         let pk = PublicKey::from(&sk);
-        // TODO: u32 takes too long to finish.
-        let value = Rng::gen::<u16>(&mut csprng) as u32;
+        let value = Rng::gen::<T>(&mut csprng);
         let blinding = Scalar::random(&mut csprng);
-        let ciphertext = new_ciphertext(&pk, value as u64, &blinding);
-        assert!(u32::try_decrypt_from(&sk, &ciphertext).unwrap() == value)
+        let ciphertext = new_ciphertext(&pk, value.to_u64(), &blinding);
+        assert!(
+            T::try_decrypt_from_with_guess(&sk, &ciphertext, value.inner()).unwrap()
+                == value.inner()
+        )
+    }
+
+    #[quickcheck]
+    fn new_ciphertext_should_work_u8(seed: u64) {
+        new_ciphertext_should_work::<u8>(seed)
+    }
+
+    #[quickcheck]
+    fn new_ciphertext_should_work_u16(seed: u64) {
+        new_ciphertext_should_work::<u16>(seed)
+    }
+
+    #[quickcheck]
+    fn new_ciphertext_should_work_u32(seed: u64) {
+        new_ciphertext_should_work::<u32>(seed)
+    }
+
+    #[quickcheck]
+    fn new_ciphertext_should_work_u64(seed: u64) {
+        new_ciphertext_should_work::<u64>(seed)
     }
 
     // Deterministically generate transacation parameters
-    fn setup_from_seed_and_num_of_transfers(
+    fn setup_from_seed_and_num_of_transfers<T>(
         seed: u64,
         num_of_transfers: u8,
-    ) -> (
+    ) -> Option<(
         ChaCha20Rng,
         // sender_sk_scalar, sender_sk, sender_pk
         (Scalar, SecretKey, PublicKey),
         // sender_initial_balance, sender_final_balance, sender_initial_balance_blinding, sender_initial_encrypted_balance
-        (u32, u32, Scalar, EncryptedBalance),
+        (T, T, Scalar, EncryptedBalance),
         // receiver_sk, receiver_pk, receiver_initial_balance, receiver_initial_balance_blinding, receiver_initial_encrypted_balance, transaction_value, transaction_blinding, sender_transaction, receiver_transaction
         Vec<(
             SecretKey,
             PublicKey,
-            u32,
+            T,
             Scalar,
             EncryptedBalance,
-            u32,
+            T,
             Scalar,
             EncryptedBalance,
             EncryptedBalance,
         )>,
-    ) {
+    )>
+    where
+        T: Copy + From<u16> + Amount + num::Integer + num::CheckedAdd + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
         // It's fucking tedious. I can haz a good combinator?
         let n = num_of_transfers % (MAX_PARTIES as u8);
         let num_of_transfers = if n == 0 { 1 } else { n };
@@ -432,28 +462,30 @@ mod tests {
         let sk_scalar = Scalar::random(&mut csprng);
         let sender_sk = SecretKey::from(sk_scalar);
         let sender_pk = PublicKey::from(&sender_sk);
-        let sender_final_balance = Rng::gen::<u16>(&mut csprng) as u32;
+        // TODO: u16 takes reasonable time to finish.
+        // let sender_final_balance = Rng::gen::<T>(&mut csprng);
+        let sender_final_balance = T::from(Rng::gen::<u16>(&mut csprng));
         let info: Vec<_> = (1..=num_of_transfers)
             .map(|_i| {
                 let receiver_sk = SecretKey::new(&mut csprng);
                 let receiver_pk = PublicKey::from(&receiver_sk);
-                let transaction_value = Rng::gen::<u16>(&mut csprng) as u32;
+                let transaction_value = T::from(Rng::gen::<u16>(&mut csprng));
                 let transaction_blinding = Scalar::random(&mut csprng);
-                let receiver_initial_balance = Rng::gen::<u16>(&mut csprng) as u32;
+                let receiver_initial_balance = T::from(Rng::gen::<u16>(&mut csprng));
                 let receiver_initial_balance_blinding = Scalar::random(&mut csprng);
                 let receiver_initial_encrypted_balance = new_ciphertext(
                     &receiver_pk,
-                    receiver_initial_balance as u64,
+                    receiver_initial_balance.to_u64(),
                     &receiver_initial_balance_blinding,
                 );
                 let sender_transaction = new_ciphertext(
                     &sender_pk,
-                    Into::<u64>::into(transaction_value),
+                    transaction_value.to_u64(),
                     &transaction_blinding,
                 );
                 let receiver_transaction = new_ciphertext(
                     &receiver_pk,
-                    Into::<u64>::into(transaction_value),
+                    transaction_value.to_u64(),
                     &transaction_blinding,
                 );
                 (
@@ -469,15 +501,17 @@ mod tests {
                 )
             })
             .collect();
-        let transferred: u32 = info.iter().map(|x| x.5).sum();
-        let sender_initial_balance = sender_final_balance + transferred;
+        let sender_initial_balance = info
+            .iter()
+            .map(|x| x.5)
+            .try_fold(sender_final_balance, |acc, v| acc.checked_add(&v))?;
         let sender_initial_balance_blinding = Scalar::random(&mut csprng);
         let sender_initial_encrypted_balance = new_ciphertext(
             &sender_pk,
-            sender_initial_balance as u64,
+            sender_initial_balance.to_u64(),
             &sender_initial_balance_blinding,
         );
-        return (
+        return Some((
             csprng,
             (sk_scalar, sender_sk, sender_pk),
             (
@@ -487,97 +521,149 @@ mod tests {
                 sender_initial_encrypted_balance,
             ),
             info,
-        );
+        ));
     }
 
-    fn setup_from_seed(
+    fn setup_from_seed<T>(
         seed: u64,
-    ) -> (
+    ) -> Option<(
         ChaCha20Rng,
         // sender_sk_scalar, sender_sk, sender_pk
         (Scalar, SecretKey, PublicKey),
         // sender_initial_balance, sender_final_balance, sender_initial_balance_blinding, sender_initial_encrypted_balance
-        (u32, u32, Scalar, EncryptedBalance),
+        (T, T, Scalar, EncryptedBalance),
         // receiver_sk, receiver_pk, receiver_initial_balance, receiver_initial_balance_blinding, receiver_initial_encrypted_balance, transaction_value, transaction_blinding, sender_transaction, receiver_transaction
         (
             SecretKey,
             PublicKey,
-            u32,
+            T,
             Scalar,
             EncryptedBalance,
-            u32,
+            T,
             Scalar,
             EncryptedBalance,
             EncryptedBalance,
         ),
-    ) {
-        let (a, b, c, d) = setup_from_seed_and_num_of_transfers(seed, 1);
-        (a, b, c, d.into_iter().next().unwrap())
+    )>
+    where
+        T: Copy + From<u16> + Amount + num::Integer + num::CheckedAdd + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        setup_from_seed_and_num_of_transfers(seed, 1)
+            .map(|(a, b, c, d)| (a, b, c, d.into_iter().next().unwrap()))
+    }
+
+    fn create_and_verify_one_to_one_transaction<T>(seed: u64) -> TestResult
+    where
+        T: Copy + From<u16> + Amount + num::Integer + num::CheckedAdd + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        match setup_from_seed::<T>(seed) {
+            None => {
+                return TestResult::discard();
+            }
+            Some((
+                mut csprng,
+                (sk_scalar, _sender_sk, sender_pk),
+                (
+                    _sender_initial_balance,
+                    _sender_final_balance,
+                    _sender_initial_balance_blinding,
+                    sender_initial_encrypted_balance,
+                ),
+                (
+                    _receiver_sk,
+                    receiver_pk,
+                    _receiver_initial_balance,
+                    _receiver_initial_balance_blinding,
+                    _receiver_initial_encrypted_balance,
+                    transaction_value,
+                    _transaction_blinding,
+                    _sender_transaction,
+                    _receiver_transaction,
+                ),
+            )) => {
+                let transaction = Transaction::<T>::create_transaction_with_rng(
+                    &sender_initial_encrypted_balance,
+                    &[(receiver_pk, transaction_value.inner())],
+                    &sender_pk,
+                    &sk_scalar,
+                    &mut csprng,
+                )
+                .expect("Should be able to create transaction");
+                assert!(transaction.verify_transaction().is_ok());
+
+                TestResult::passed()
+            }
+        }
     }
 
     #[quickcheck]
-    fn create_and_verify_one_to_one_transaction(seed: u64) {
-        let (
-            mut csprng,
-            (sk_scalar, _sender_sk, sender_pk),
-            (
-                _sender_initial_balance,
-                _sender_final_balance,
-                _sender_initial_balance_blinding,
-                sender_initial_encrypted_balance,
-            ),
-            (
-                _receiver_sk,
-                receiver_pk,
-                _receiver_initial_balance,
-                _receiver_initial_balance_blinding,
-                _receiver_initial_encrypted_balance,
-                transaction_value,
-                _transaction_blinding,
-                _sender_transaction,
-                _receiver_transaction,
-            ),
-        ) = setup_from_seed(seed);
-
-        let transaction = Transaction::<u32>::create_transaction_with_rng(
-            &sender_initial_encrypted_balance,
-            &[(receiver_pk, transaction_value)],
-            &sender_pk,
-            &sk_scalar,
-            &mut csprng,
-        )
-        .expect("Should be able to create transaction");
-
-        assert!(transaction.verify_transaction().is_ok());
+    fn create_and_verify_one_to_one_transaction_u16(seed: u64) -> TestResult {
+        create_and_verify_one_to_one_transaction::<u16>(seed)
     }
 
     #[quickcheck]
-    fn create_and_verify_one_to_n_transaction(seed: u64, _n: u8) {
+    fn create_and_verify_one_to_one_transaction_u32(seed: u64) -> TestResult {
+        create_and_verify_one_to_one_transaction::<u32>(seed)
+    }
+
+    #[quickcheck]
+    fn create_and_verify_one_to_one_transaction_u64(seed: u64) -> TestResult {
+        create_and_verify_one_to_one_transaction::<u64>(seed)
+    }
+
+    fn create_and_verify_one_to_n_transaction<T>(seed: u64, _n: u8) -> TestResult
+    where
+        T: Copy + From<u16> + Amount + num::Integer + num::CheckedAdd + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
         // TODO: BatchZetherProof has restriction on the number of transfers.
         // n+1 must be a power of 2. We temporarily hardcode 7.
-        let setup = setup_from_seed_and_num_of_transfers(seed, 7);
-        let (
-            mut csprng,
-            (sk_scalar, _sender_sk, sender_pk),
-            (
-                _sender_initial_balance,
-                _sender_final_balance,
-                _sender_initial_balance_blinding,
-                sender_initial_encrypted_balance,
-            ),
-            info,
-        ) = setup;
-        let transfers: Vec<(PublicKey, u32)> = info.iter().map(|x| (x.1, x.5)).collect();
-        let transaction = Transaction::<u32>::create_transaction_with_rng(
-            &sender_initial_encrypted_balance,
-            &transfers,
-            &sender_pk,
-            &sk_scalar,
-            &mut csprng,
-        )
-        .expect("Should be able to create transaction");
+        match setup_from_seed_and_num_of_transfers::<T>(seed, 7) {
+            None => {
+                return TestResult::discard();
+            }
+            Some((
+                mut csprng,
+                (sk_scalar, _sender_sk, sender_pk),
+                (
+                    _sender_initial_balance,
+                    _sender_final_balance,
+                    _sender_initial_balance_blinding,
+                    sender_initial_encrypted_balance,
+                ),
+                info,
+            )) => {
+                let transfers: Vec<(PublicKey, <T as Amount>::Target)> =
+                    info.iter().map(|x| (x.1, x.5.inner())).collect();
+                let transaction = Transaction::<T>::create_transaction_with_rng(
+                    &sender_initial_encrypted_balance,
+                    &transfers,
+                    &sender_pk,
+                    &sk_scalar,
+                    &mut csprng,
+                )
+                .expect("Should be able to create transaction");
+                assert!(transaction.verify_transaction().is_ok());
+                TestResult::passed()
+            }
+        }
+    }
 
-        assert!(transaction.verify_transaction().is_ok());
+    #[quickcheck]
+    fn create_and_verify_one_to_n_transaction_u16(seed: u64, n: u8) -> TestResult {
+        create_and_verify_one_to_n_transaction::<u16>(seed, n)
+    }
+
+    #[quickcheck]
+    fn create_and_verify_one_to_n_transaction_u32(seed: u64, n: u8) -> TestResult {
+        create_and_verify_one_to_n_transaction::<u32>(seed, n)
+    }
+
+    #[quickcheck]
+    fn create_and_verify_one_to_n_transaction_u64(seed: u64, n: u8) -> TestResult {
+        create_and_verify_one_to_n_transaction::<u64>(seed, n)
     }
 
     #[quickcheck]
@@ -650,65 +736,97 @@ mod tests {
         TestResult::passed()
     }
 
-    #[quickcheck]
-    fn one_to_n_transacation_balance_should_be_correct(seed: u64, _n: u8) {
+    fn one_to_n_transacation_balance_should_be_correct<T>(seed: u64, _n: u8) -> TestResult
+    where
+        T: Copy + From<u16> + Amount + num::Integer + num::CheckedAdd + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
         // TODO: BatchZetherProof has restriction on the number of transfers.
         // n+1 must be a power of 2. We temporarily hardcode 7.
-        let setup = setup_from_seed_and_num_of_transfers(seed, 7);
-        let (
-            mut csprng,
-            (sk_scalar, sender_sk, sender_pk),
-            (
-                _sender_initial_balance,
-                sender_final_balance,
-                _sender_initial_balance_blinding,
-                sender_initial_encrypted_balance,
-            ),
-            info,
-        ) = setup;
-        let transfers: Vec<(PublicKey, u32)> = info.iter().map(|x| (x.1, x.5)).collect();
-        let transaction = Transaction::<u32>::create_transaction_with_rng(
-            &sender_initial_encrypted_balance,
-            &transfers,
-            &sender_pk,
-            &sk_scalar,
-            &mut csprng,
-        )
-        .expect("Should be able to create transaction");
-        assert_eq!(
-            transaction
-                .try_get_sender_final_balance_with_guess(&sender_sk, sender_final_balance)
-                .unwrap(),
-            sender_final_balance
-        );
-
-        let receivers_original_balance: Vec<EncryptedBalance> = info.iter().map(|x| x.4).collect();
-        let receivers_final_balance =
-            transaction.get_receiver_final_encrypted_balance(&receivers_original_balance);
-        for (
-            (
-                receiver_sk,
-                _receiver_pk,
-                receiver_initial_balance,
-                _receiver_initial_balance_blinding,
-                _receiver_initial_encrypted_balance,
-                transaction_value,
-                _transaction_blinding,
-                _sender_transaction,
-                _receiver_transaction,
-            ),
-            receiver_final_encrypted_balance,
-        ) in info.iter().zip(receivers_final_balance)
-        {
-            assert_eq!(
-                u32::try_decrypt_from_with_guess(
-                    &receiver_sk,
-                    &receiver_final_encrypted_balance,
-                    transaction_value + receiver_initial_balance
+        match setup_from_seed_and_num_of_transfers::<T>(seed, 7) {
+            None => {
+                return TestResult::discard();
+            }
+            Some((
+                mut csprng,
+                (sk_scalar, sender_sk, sender_pk),
+                (
+                    _sender_initial_balance,
+                    sender_final_balance,
+                    _sender_initial_balance_blinding,
+                    sender_initial_encrypted_balance,
+                ),
+                info,
+            )) => {
+                let transfers: Vec<(PublicKey, <T as Amount>::Target)> =
+                    info.iter().map(|x| (x.1, x.5.inner())).collect();
+                let transaction = Transaction::<T>::create_transaction_with_rng(
+                    &sender_initial_encrypted_balance,
+                    &transfers[..],
+                    &sender_pk,
+                    &sk_scalar,
+                    &mut csprng,
                 )
-                .unwrap(),
-                transaction_value + receiver_initial_balance
-            );
+                .expect("Should be able to create transaction");
+                assert_eq!(
+                    transaction
+                        .try_get_sender_final_balance_with_guess(
+                            &sender_sk,
+                            sender_final_balance.inner()
+                        )
+                        .unwrap(),
+                    sender_final_balance.inner()
+                );
+
+                let receivers_original_balance: Vec<EncryptedBalance> =
+                    info.iter().map(|x| x.4).collect();
+                let receivers_final_balance =
+                    transaction.get_receiver_final_encrypted_balance(&receivers_original_balance);
+                for (
+                    (
+                        receiver_sk,
+                        _receiver_pk,
+                        receiver_initial_balance,
+                        _receiver_initial_balance_blinding,
+                        _receiver_initial_encrypted_balance,
+                        transaction_value,
+                        _transaction_blinding,
+                        _sender_transaction,
+                        _receiver_transaction,
+                    ),
+                    receiver_final_encrypted_balance,
+                ) in info.iter().zip(receivers_final_balance)
+                {
+                    match transaction_value.checked_add(receiver_initial_balance) {
+                        None => return TestResult::discard(),
+                        Some(b) => assert_eq!(
+                            T::try_decrypt_from_with_guess(
+                                &receiver_sk,
+                                &receiver_final_encrypted_balance,
+                                b.inner()
+                            )
+                            .unwrap(),
+                            b.inner()
+                        ),
+                    }
+                }
+            }
         }
+        TestResult::passed()
+    }
+
+    #[quickcheck]
+    fn one_to_n_transacation_balance_should_be_correct_u16(seed: u64, n: u8) -> TestResult {
+        one_to_n_transacation_balance_should_be_correct::<u16>(seed, n)
+    }
+
+    #[quickcheck]
+    fn one_to_n_transacation_balance_should_be_correct_u32(seed: u64, n: u8) -> TestResult {
+        one_to_n_transacation_balance_should_be_correct::<u32>(seed, n)
+    }
+
+    #[quickcheck]
+    fn one_to_n_transacation_balance_should_be_correct_u64(seed: u64, n: u8) -> TestResult {
+        one_to_n_transacation_balance_should_be_correct::<u64>(seed, n)
     }
 }

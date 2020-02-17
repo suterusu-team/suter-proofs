@@ -13,7 +13,7 @@ use crate::{Ciphertext, PublicKey, SecretKey};
 /// private::Sealed is used to prevent any other types from implementing Amount.
 /// See https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed
 pub trait Amount: Sized + private::Sealed {
-    type Target: Copy + Integer + CheckedAdd + CheckedSub + Into<u64>;
+    type Target: Copy + std::fmt::Debug + Integer + CheckedAdd + CheckedSub + Into<u64>;
 
     fn new(target: <Self as Amount>::Target) -> Self;
 
