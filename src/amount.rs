@@ -1,8 +1,9 @@
-use num::{CheckedAdd, CheckedSub, Integer};
+use std::marker::Sized;
 
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
+use num::{CheckedAdd, CheckedSub, Integer};
 
 use crate::constants::BASE_POINT;
 use crate::{Ciphertext, PublicKey, SecretKey};
@@ -11,8 +12,10 @@ use crate::{Ciphertext, PublicKey, SecretKey};
 /// This trait can be viewed as a wrapper to target types.
 /// private::Sealed is used to prevent any other types from implementing Amount.
 /// See https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed
-pub trait Amount: private::Sealed {
+pub trait Amount: Sized + private::Sealed {
     type Target: Copy + Integer + CheckedAdd + CheckedSub + Into<u64>;
+
+    fn new(target: <Self as Amount>::Target) -> Self;
 
     /// Get the inner data of this wrapper.
     fn inner(&self) -> <Self as Amount>::Target;
@@ -27,10 +30,25 @@ pub trait Amount: private::Sealed {
 
     fn encrypt_with(&self, pk: &PublicKey) -> Ciphertext;
 
+    fn get_decrypted_point(sk: &SecretKey, ciphertext: &Ciphertext) -> RistrettoPoint {
+        sk.decrypt(&ciphertext)
+    }
+
     fn try_decrypt_from(
         sk: &SecretKey,
         ciphertext: &Ciphertext,
     ) -> Option<<Self as Amount>::Target>;
+
+    fn try_decrypt_from_with_guess(
+        sk: &SecretKey,
+        ciphertext: &Ciphertext,
+        guess: <Self as Amount>::Target,
+    ) -> Option<<Self as Amount>::Target> {
+        if Self::new(guess).to_point() == Self::get_decrypted_point(sk, ciphertext) {
+            return Some(guess);
+        }
+        Self::try_decrypt_from(sk, ciphertext)
+    }
 }
 
 mod private {
@@ -45,6 +63,10 @@ macro_rules! impl_amount {
     ( $t:ty, $max:expr ) => {
         impl Amount for $t {
             type Target = $t;
+
+            fn new(target: <Self as Amount>::Target) -> Self {
+                target
+            }
 
             #[inline]
             fn inner(&self) -> <Self as Amount>::Target {
@@ -70,7 +92,7 @@ macro_rules! impl_amount {
                 sk: &SecretKey,
                 ciphertext: &Ciphertext,
             ) -> Option<<Self as Amount>::Target> {
-                let point = sk.decrypt(&ciphertext);
+                let point = Self::get_decrypted_point(sk, ciphertext);
                 let mut acc: RistrettoPoint = Identity::identity();
                 for i in 0..$max {
                     if acc == point {

@@ -9,10 +9,10 @@ macro_rules! my_debug {
 
 #[cfg(not(debug_assertions))]
 macro_rules! my_debug {
-    ($( $x:expr ),* ) => {
-        ()
-    };
     ($x:expr) => {
         std::convert::identity($x)
+    };
+    ($( $x:expr ),* ) => {
+        ()
     };
 }

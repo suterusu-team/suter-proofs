@@ -106,8 +106,16 @@ impl<A: Amount> Transaction<A> {
         A::try_decrypt_from(sk, &self.get_sender_final_encrypted_balance())
     }
 
+    pub fn try_get_sender_final_balance_with_guess(
+        &self,
+        sk: &SecretKey,
+        guess: <A as Amount>::Target,
+    ) -> Option<<A as Amount>::Target> {
+        A::try_decrypt_from_with_guess(sk, &self.get_sender_final_encrypted_balance(), guess)
+    }
+
     /// Panics on encrypted balances and receiver transactions are not encrypted with the same public keys.
-    pub fn get_receivers_final_encrypted_balance(
+    pub fn get_receiver_final_encrypted_balance(
         &self,
         receiver_original_balance: &[EncryptedBalance],
     ) -> Vec<EncryptedBalance> {
@@ -604,38 +612,103 @@ mod tests {
         .expect("Should be able to create transaction");
 
         assert_eq!(
-            u32::try_decrypt_from(
+            u32::try_decrypt_from_with_guess(
                 &sender_sk,
-                &transaction.sender_transactions().first().unwrap()
+                &transaction.sender_transactions().first().unwrap(),
+                transaction_value
             )
             .unwrap(),
             transaction_value
         );
         assert_eq!(
-            u32::try_decrypt_from(
+            u32::try_decrypt_from_with_guess(
                 &receiver_sk,
-                &transaction.receiver_transactions().first().unwrap()
+                &transaction.receiver_transactions().first().unwrap(),
+                transaction_value
             )
             .unwrap(),
             transaction_value
         );
         assert_eq!(
             transaction
-                .try_get_sender_final_balance(&sender_sk)
+                .try_get_sender_final_balance_with_guess(&sender_sk, sender_final_balance)
                 .unwrap(),
             sender_final_balance
         );
         assert_eq!(
-            u32::try_decrypt_from(
+            u32::try_decrypt_from_with_guess(
                 &receiver_sk,
                 &transaction
-                    .get_receivers_final_encrypted_balance(&[receiver_initial_encrypted_balance])
+                    .get_receiver_final_encrypted_balance(&[receiver_initial_encrypted_balance])
                     .first()
-                    .unwrap()
+                    .unwrap(),
+                receiver_final_balance
             )
             .unwrap(),
             receiver_final_balance
         );
         TestResult::passed()
+    }
+
+    #[quickcheck]
+    fn one_to_n_transacation_balance_should_be_correct(seed: u64, _n: u8) {
+        // TODO: BatchZetherProof has restriction on the number of transfers.
+        // n+1 must be a power of 2. We temporarily hardcode 7.
+        let setup = setup_from_seed_and_num_of_transfers(seed, 7);
+        let (
+            mut csprng,
+            (sk_scalar, sender_sk, sender_pk),
+            (
+                _sender_initial_balance,
+                sender_final_balance,
+                _sender_initial_balance_blinding,
+                sender_initial_encrypted_balance,
+            ),
+            info,
+        ) = setup;
+        let transfers: Vec<(PublicKey, u32)> = info.iter().map(|x| (x.1, x.5)).collect();
+        let transaction = Transaction::<u32>::create_transaction_with_rng(
+            &sender_initial_encrypted_balance,
+            &transfers,
+            &sender_pk,
+            &sk_scalar,
+            &mut csprng,
+        )
+        .expect("Should be able to create transaction");
+        assert_eq!(
+            transaction
+                .try_get_sender_final_balance_with_guess(&sender_sk, sender_final_balance)
+                .unwrap(),
+            sender_final_balance
+        );
+
+        let receivers_original_balance: Vec<EncryptedBalance> = info.iter().map(|x| x.4).collect();
+        let receivers_final_balance =
+            transaction.get_receiver_final_encrypted_balance(&receivers_original_balance);
+        for (
+            (
+                receiver_sk,
+                _receiver_pk,
+                receiver_initial_balance,
+                _receiver_initial_balance_blinding,
+                _receiver_initial_encrypted_balance,
+                transaction_value,
+                _transaction_blinding,
+                _sender_transaction,
+                _receiver_transaction,
+            ),
+            receiver_final_encrypted_balance,
+        ) in info.iter().zip(receivers_final_balance)
+        {
+            assert_eq!(
+                u32::try_decrypt_from_with_guess(
+                    &receiver_sk,
+                    &receiver_final_encrypted_balance,
+                    transaction_value + receiver_initial_balance
+                )
+                .unwrap(),
+                transaction_value + receiver_initial_balance
+            );
+        }
     }
 }
