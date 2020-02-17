@@ -20,6 +20,8 @@ pub trait Amount: Sized + private::Sealed {
     /// Get the inner data of this wrapper.
     fn inner(&self) -> <Self as Amount>::Target;
 
+    fn bit_size() -> usize;
+
     fn to_u64(&self) -> u64 {
         self.inner().into()
     }
@@ -60,7 +62,7 @@ mod private {
 }
 
 macro_rules! impl_amount {
-    ( $t:ty, $max:expr ) => {
+    ( $t:ty, $bit_size:expr, $max:expr ) => {
         impl Amount for $t {
             type Target = $t;
 
@@ -71,6 +73,10 @@ macro_rules! impl_amount {
             #[inline]
             fn inner(&self) -> <Self as Amount>::Target {
                 *self
+            }
+
+            fn bit_size() -> usize {
+                $bit_size
             }
 
             // Elgamal encryption with balances raised from base point.
@@ -106,10 +112,10 @@ macro_rules! impl_amount {
     };
 }
 
-impl_amount!(u8, std::u8::MAX);
-impl_amount!(u16, std::u16::MAX);
-impl_amount!(u32, std::u32::MAX);
-impl_amount!(u64, std::u64::MAX);
+impl_amount!(u8, 8, std::u8::MAX);
+impl_amount!(u16, 16, std::u16::MAX);
+impl_amount!(u32, 32, std::u32::MAX);
+impl_amount!(u64, 64, std::u64::MAX);
 
 #[cfg(test)]
 mod tests {

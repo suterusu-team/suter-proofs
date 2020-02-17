@@ -330,7 +330,7 @@ fn do_create_transaction<A: Amount>(
             &mut prover_transcript,
             &values_to_commit,
             &blindings,
-            32,
+            A::bit_size(),
             &sender_pk.get_point(),
             &receiver_pks
                 .first()
@@ -353,7 +353,7 @@ fn do_create_transaction<A: Amount>(
             &mut prover_transcript,
             &values_to_commit,
             &blindings,
-            32,
+            A::bit_size(),
             &sender_pk.get_point(),
             &receiver_pks.iter().map(|pk| pk.get_point()).collect(),
             &ciphertext_points_random_term_last(&sender_final_encrypted_balance),
