@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::amount::Amount;
 use super::constants::MERLIN_CONFIDENTIAL_TRANSACTION_LABEL;
+use super::constants::RANDOM_PK_TO_PAD_TRANSACTIONS;
 use super::utils::{ciphertext_points_random_term_last, RistrettoPointTuple};
 use super::TransactionError;
 use crate::constants::MAX_NUM_OF_TRANSFERS;
@@ -330,15 +331,20 @@ fn next_power_of_2(m: usize) -> usize {
 
 // Padding transfers with transferred value 0, so that we can use aggregate zether proofs.
 // This is necessary as BatchZetherProof only supports 2^n value commitments.
+// For some unfathomable reason, verification of transaction padded with transfers from the sender to the sender failed.
+// TODO: fix this.
 fn pad_transfers<A: Amount>(
     transfers: &[(PublicKey, <A as Amount>::Target)],
-    pk: &PublicKey,
+    _pk: &PublicKey,
 ) -> Vec<(PublicKey, <A as Amount>::Target)> {
     let mut v = vec![];
     v.extend(transfers);
     let n = transfers.len();
     if n > 1 {
-        v.extend(std::iter::repeat((*pk, A::zero())).take(next_power_of_2(n) - n - 1));
+        v.extend(
+            std::iter::repeat((*RANDOM_PK_TO_PAD_TRANSACTIONS, A::zero()))
+                .take(next_power_of_2(n) - n - 1),
+        );
     }
     v
 }
@@ -707,7 +713,7 @@ mod tests {
         create_and_verify_one_to_one_transaction::<u64>(seed)
     }
 
-    fn create_and_verify_one_to_n_transaction<T>(seed: u64, _n: u8) -> TestResult
+    fn create_and_verify_one_to_n_transaction<T>(seed: u64, n: u8) -> TestResult
     where
         T: Copy
             + std::fmt::Debug
@@ -720,7 +726,7 @@ mod tests {
     {
         // TODO: BatchZetherProof has restriction on the number of transfers.
         // n+1 must be a power of 2. We temporarily hardcode 7.
-        match setup_from_seed_and_num_of_transfers::<T>(seed, 7) {
+        match setup_from_seed_and_num_of_transfers::<T>(seed, n) {
             None => {
                 return TestResult::discard();
             }
