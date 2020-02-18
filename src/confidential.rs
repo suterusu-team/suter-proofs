@@ -14,7 +14,7 @@ use super::amount::Amount;
 use super::constants::MERLIN_CONFIDENTIAL_TRANSACTION_LABEL;
 use super::utils::{ciphertext_points_random_term_last, RistrettoPointTuple};
 use super::TransactionError;
-use crate::constants::MAX_PARTIES;
+use crate::constants::MAX_NUM_OF_TRANSFERS;
 use crate::constants::{BASE_POINT, BP_GENS, PC_GENS};
 use crate::{Ciphertext, PublicKey, SecretKey};
 
@@ -65,14 +65,31 @@ impl<A: Amount> Transaction<A> {
         }
     }
 
+    /// Number of transfers contained in this transaction
     pub fn num_of_transfers(&self) -> usize {
         self.transfers.len()
     }
 
+    /// Number of effective transfers contained in this transaction
+    pub fn num_of_effective_transfers(&self) -> usize {
+        self.sender_transactions().len()
+    }
+
+    /// Transactions for sender to apply
     pub fn sender_transactions(&self) -> Vec<&EncryptedBalance> {
         self.transfers.iter().map(|(s, _r)| s).collect()
     }
 
+    /// Effective transactions (transaction whose receiver is not sender itself) for sender to apply
+    pub fn effective_sender_transactions(&self) -> Vec<&EncryptedBalance> {
+        self.transfers
+            .iter()
+            .filter(|(_s, r)| r.pk != self.sender_pk())
+            .map(|(s, _r)| s)
+            .collect()
+    }
+
+    /// Get the public key of sender
     pub fn sender_pk(&self) -> PublicKey {
         self.original_balance.pk
     }
@@ -81,10 +98,21 @@ impl<A: Amount> Transaction<A> {
         self.original_balance.pk.get_point()
     }
 
+    /// Transactions for receiver to apply
     pub fn receiver_transactions(&self) -> Vec<&EncryptedBalance> {
         self.transfers.iter().map(|(_s, r)| r).collect()
     }
 
+    /// Effective transactions (transaction whose receiver is not sender itself) for receivers to apply
+    pub fn effective_receiver_transactions(&self) -> Vec<&EncryptedBalance> {
+        self.transfers
+            .iter()
+            .filter(|(_s, r)| r.pk != self.sender_pk())
+            .map(|(_s, r)| r)
+            .collect()
+    }
+
+    /// Get the public keys of receivers
     pub fn receiver_pks(&self) -> Vec<PublicKey> {
         self.transfers.iter().map(|(_s, r)| r.pk).collect()
     }
@@ -96,16 +124,19 @@ impl<A: Amount> Transaction<A> {
             .collect()
     }
 
+    /// Get the final encrypted balance of sender after transaction is applied
     pub fn get_sender_final_encrypted_balance(&self) -> EncryptedBalance {
-        self.sender_transactions()
+        self.effective_sender_transactions()
             .iter()
-            .fold(self.original_balance, |sum, i| sum - *i)
+            .fold(self.original_balance, |acc, i| acc - *i)
     }
 
+    /// Get the final balance of sender after transaction is applied
     pub fn try_get_sender_final_balance(&self, sk: &SecretKey) -> Option<<A as Amount>::Target> {
         A::try_decrypt_from(sk, &self.get_sender_final_encrypted_balance())
     }
 
+    /// Get the final balance of sender after transaction is applied
     pub fn try_get_sender_final_balance_with_guess(
         &self,
         sk: &SecretKey,
@@ -114,14 +145,12 @@ impl<A: Amount> Transaction<A> {
         A::try_decrypt_from_with_guess(sk, &self.get_sender_final_encrypted_balance(), guess)
     }
 
+    /// Get the final balance of receivers after transaction is applied to receiver_original_balance.
     /// Panics on encrypted balances and receiver transactions are not encrypted with the same public keys.
     pub fn get_receiver_final_encrypted_balance(
         &self,
         receiver_original_balance: &[EncryptedBalance],
     ) -> Vec<EncryptedBalance> {
-        if receiver_original_balance.len() != self.num_of_transfers() {
-            panic!("Abort! The number of receivers' original ciphertexts does not equal the number of transfers");
-        }
         receiver_original_balance
             .iter()
             .zip(self.receiver_transactions())
@@ -179,15 +208,23 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
         if num_of_transfers == 0 {
             return Err(TransactionError::EmptyTransfers);
         }
-        if num_of_transfers >= MAX_PARTIES {
-            return Err(TransactionError::TooManyTransfers);
+        if num_of_transfers > MAX_NUM_OF_TRANSFERS {
+            return Err(TransactionError::TooManyTransfers {
+                given: num_of_transfers,
+                max: MAX_NUM_OF_TRANSFERS,
+            });
         }
+        my_debug!(num_of_transfers, transfers);
+        let padded_transfers = &pad_transfers::<A>(transfers, sender_pk);
+        let num_of_padded_transfers = padded_transfers.len();
+        my_debug!(num_of_padded_transfers, padded_transfers);
+
         let (blindings, blinding_for_transaction_value) =
-            generate_transaction_random_parameters(rng, num_of_transfers + 1);
+            generate_transaction_random_parameters(rng, num_of_padded_transfers + 1);
         my_debug!(&blindings, &blinding_for_transaction_value);
         do_create_transaction::<Self::Amount>(
             original_balance,
-            transfers,
+            padded_transfers,
             &blindings,
             &blinding_for_transaction_value,
             sender_pk,
@@ -197,16 +234,23 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
 
     fn verify_transaction(&self) -> Result<(), TransactionError> {
         // TODO: Check BatchZetherProof for the restriction of the num_of_transfers
-        if self.num_of_transfers() == 0 {
+        let num_of_transfers = self.num_of_transfers();
+        if num_of_transfers == 0 {
             return Err(TransactionError::EmptyTransfers);
         }
-        if self.num_of_transfers() + 1 != self.commitments.len() {
+        if num_of_transfers + 1 != self.commitments.len() {
             return Err(TransactionError::NumNotMatch);
+        }
+        if num_of_transfers > MAX_NUM_OF_TRANSFERS {
+            return Err(TransactionError::TooManyTransfers {
+                given: num_of_transfers,
+                max: MAX_NUM_OF_TRANSFERS,
+            });
         }
         let mut verifier_transcript = Transcript::new(MERLIN_CONFIDENTIAL_TRANSACTION_LABEL);
         match &self.proof {
             Proof::Zether(proof) => {
-                if self.num_of_transfers() != 1 {
+                if num_of_transfers != 1 {
                     return Err(TransactionError::NumNotMatch);
                 }
                 proof
@@ -278,6 +322,26 @@ fn generate_transaction_random_parameters<T: RngCore + CryptoRng>(
         Scalar::random(rng),
     )
 }
+fn next_power_of_2(m: usize) -> usize {
+    let m = m as u32;
+    let n = (0..=m).find(|x| 2_u32.pow(*x) > m).unwrap();
+    2_u32.pow(n) as usize
+}
+
+// Padding transfers with transferred value 0, so that we can use aggregate zether proofs.
+// This is necessary as BatchZetherProof only supports 2^n value commitments.
+fn pad_transfers<A: Amount>(
+    transfers: &[(PublicKey, <A as Amount>::Target)],
+    pk: &PublicKey,
+) -> Vec<(PublicKey, <A as Amount>::Target)> {
+    let mut v = vec![];
+    v.extend(transfers);
+    let n = transfers.len();
+    if n > 1 {
+        v.extend(std::iter::repeat((*pk, A::zero())).take(next_power_of_2(n) - n - 1));
+    }
+    v
+}
 
 fn do_create_transaction<A: Amount>(
     original_balance: &EncryptedBalance,
@@ -287,10 +351,12 @@ fn do_create_transaction<A: Amount>(
     sender_pk: &PublicKey,
     sender_sk: &Scalar,
 ) -> Result<Transaction<A>, TransactionError> {
-    // Must have transfers
+    // Must have transfers.
     assert!(!transfers.is_empty());
     // Blindings includes blindings for transfer value, and blinding for final value.
     assert_eq!(transfers.len() + 1, blindings.len());
+    // Not too many transfers to be included.
+    assert!(transfers.len() <= MAX_NUM_OF_TRANSFERS);
 
     let sk = SecretKey::from(*sender_sk);
     let mut values_to_commit: Vec<u64> = transfers
@@ -303,6 +369,11 @@ fn do_create_transaction<A: Amount>(
         .iter()
         .try_fold(sender_initial_balance, |acc, &(_pk, v)| acc.checked_sub(&v))
         .ok_or(TransactionError::Overflow)?;
+    my_debug!(
+        sender_initial_balance,
+        sender_final_balance,
+        &values_to_commit
+    );
     values_to_commit.push(sender_final_balance.into());
     let receiver_pks: Vec<PublicKey> = transfers.iter().map(|(pk, _v)| *pk).collect();
     let sender_transactions: Vec<Ciphertext> = transfers
@@ -452,12 +523,22 @@ mod tests {
         )>,
     )>
     where
-        T: Copy + From<u16> + Amount + num::Integer + num::CheckedAdd + std::iter::Sum,
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
         Standard: Distribution<T>,
     {
         // It's fucking tedious. I can haz a good combinator?
-        let n = num_of_transfers % (MAX_PARTIES as u8);
-        let num_of_transfers = if n == 0 { 1 } else { n };
+        let n = num_of_transfers.rem_euclid(MAX_NUM_OF_TRANSFERS as u8);
+        let num_of_transfers = if n == 0 {
+            MAX_NUM_OF_TRANSFERS as u8
+        } else {
+            n
+        };
         let mut csprng: ChaCha20Rng = SeedableRng::seed_from_u64(seed);
         let sk_scalar = Scalar::random(&mut csprng);
         let sender_sk = SecretKey::from(sk_scalar);
@@ -469,7 +550,8 @@ mod tests {
             .map(|_i| {
                 let receiver_sk = SecretKey::new(&mut csprng);
                 let receiver_pk = PublicKey::from(&receiver_sk);
-                let transaction_value = T::from(Rng::gen::<u16>(&mut csprng));
+                // Don't use large transaction value to avoid overflow
+                let transaction_value = T::from(Rng::gen::<u8>(&mut csprng) as u16);
                 let transaction_blinding = Scalar::random(&mut csprng);
                 let receiver_initial_balance = T::from(Rng::gen::<u16>(&mut csprng));
                 let receiver_initial_balance_blinding = Scalar::random(&mut csprng);
@@ -501,9 +583,9 @@ mod tests {
                 )
             })
             .collect();
-        let sender_initial_balance = info
+        let transaction_values = info.iter().map(|x| x.5).collect::<Vec<_>>();
+        let sender_initial_balance = transaction_values
             .iter()
-            .map(|x| x.5)
             .try_fold(sender_final_balance, |acc, v| acc.checked_add(&v))?;
         let sender_initial_balance_blinding = Scalar::random(&mut csprng);
         let sender_initial_encrypted_balance = new_ciphertext(
@@ -546,7 +628,13 @@ mod tests {
         ),
     )>
     where
-        T: Copy + From<u16> + Amount + num::Integer + num::CheckedAdd + std::iter::Sum,
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
         Standard: Distribution<T>,
     {
         setup_from_seed_and_num_of_transfers(seed, 1)
@@ -555,7 +643,13 @@ mod tests {
 
     fn create_and_verify_one_to_one_transaction<T>(seed: u64) -> TestResult
     where
-        T: Copy + From<u16> + Amount + num::Integer + num::CheckedAdd + std::iter::Sum,
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
         Standard: Distribution<T>,
     {
         match setup_from_seed::<T>(seed) {
@@ -615,7 +709,13 @@ mod tests {
 
     fn create_and_verify_one_to_n_transaction<T>(seed: u64, _n: u8) -> TestResult
     where
-        T: Copy + From<u16> + Amount + num::Integer + num::CheckedAdd + std::iter::Sum,
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
         Standard: Distribution<T>,
     {
         // TODO: BatchZetherProof has restriction on the number of transfers.
@@ -645,6 +745,7 @@ mod tests {
                     &mut csprng,
                 )
                 .expect("Should be able to create transaction");
+                my_debug!(&transaction.verify_transaction());
                 assert!(transaction.verify_transaction().is_ok());
                 TestResult::passed()
             }
@@ -738,12 +839,18 @@ mod tests {
 
     fn one_to_n_transacation_balance_should_be_correct<T>(seed: u64, _n: u8) -> TestResult
     where
-        T: Copy + From<u16> + Amount + num::Integer + num::CheckedAdd + std::iter::Sum,
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
         Standard: Distribution<T>,
     {
         // TODO: BatchZetherProof has restriction on the number of transfers.
         // n+1 must be a power of 2. We temporarily hardcode 7.
-        match setup_from_seed_and_num_of_transfers::<T>(seed, 7) {
+        match setup_from_seed_and_num_of_transfers::<T>(seed, 6) {
             None => {
                 return TestResult::discard();
             }

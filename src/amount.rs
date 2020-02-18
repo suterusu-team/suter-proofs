@@ -3,7 +3,7 @@ use std::marker::Sized;
 use curve25519_dalek::ristretto::RistrettoPoint;
 use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
-use num::{CheckedAdd, CheckedSub, Integer};
+use num::{CheckedAdd, CheckedSub, Integer, Zero};
 
 use crate::constants::BASE_POINT;
 use crate::{Ciphertext, PublicKey, SecretKey};
@@ -13,12 +13,16 @@ use crate::{Ciphertext, PublicKey, SecretKey};
 /// private::Sealed is used to prevent any other types from implementing Amount.
 /// See https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed
 pub trait Amount: Sized + private::Sealed {
-    type Target: Copy + std::fmt::Debug + Integer + CheckedAdd + CheckedSub + Into<u64>;
+    type Target: Copy + std::fmt::Debug + Integer + Zero + CheckedAdd + CheckedSub + Into<u64>;
 
     fn new(target: <Self as Amount>::Target) -> Self;
 
     /// Get the inner data of this wrapper.
     fn inner(&self) -> <Self as Amount>::Target;
+
+    fn zero() -> <Self as Amount>::Target {
+        <Self as Amount>::Target::zero()
+    }
 
     fn bit_size() -> usize;
 
