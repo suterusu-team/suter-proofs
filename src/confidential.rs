@@ -234,7 +234,6 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
     }
 
     fn verify_transaction(&self) -> Result<(), TransactionError> {
-        // TODO: Check BatchZetherProof for the restriction of the num_of_transfers
         let num_of_transfers = self.num_of_transfers();
         if num_of_transfers == 0 {
             return Err(TransactionError::EmptyTransfers);
@@ -724,8 +723,6 @@ mod tests {
             + std::iter::Sum,
         Standard: Distribution<T>,
     {
-        // TODO: BatchZetherProof has restriction on the number of transfers.
-        // n+1 must be a power of 2. We temporarily hardcode 7.
         match setup_from_seed_and_num_of_transfers::<T>(seed, n) {
             None => {
                 return TestResult::discard();
@@ -843,7 +840,7 @@ mod tests {
         TestResult::passed()
     }
 
-    fn one_to_n_transacation_balance_should_be_correct<T>(seed: u64, _n: u8) -> TestResult
+    fn one_to_n_transacation_balance_should_be_correct<T>(seed: u64, n: u8) -> TestResult
     where
         T: Copy
             + std::fmt::Debug
@@ -854,9 +851,7 @@ mod tests {
             + std::iter::Sum,
         Standard: Distribution<T>,
     {
-        // TODO: BatchZetherProof has restriction on the number of transfers.
-        // n+1 must be a power of 2. We temporarily hardcode 7.
-        match setup_from_seed_and_num_of_transfers::<T>(seed, 6) {
+        match setup_from_seed_and_num_of_transfers::<T>(seed, n) {
             None => {
                 return TestResult::discard();
             }
