@@ -171,7 +171,7 @@ pub trait ConfidentialTransaction {
         original_balance: &EncryptedBalance,
         transfers: &[(PublicKey, <Self::Amount as Amount>::Target)],
         sender_pk: &PublicKey,
-        sender_sk: &Scalar,
+        sender_sk: &SecretKey,
     ) -> Result<Transaction<Self::Amount>, TransactionError> {
         Self::create_transaction_with_rng(
             original_balance,
@@ -187,7 +187,7 @@ pub trait ConfidentialTransaction {
         original_balance: &EncryptedBalance,
         transfers: &[(PublicKey, <Self::Amount as Amount>::Target)],
         sender_pk: &PublicKey,
-        sender_sk: &Scalar,
+        sender_sk: &SecretKey,
         rng: &mut T,
     ) -> Result<Transaction<Self::Amount>, TransactionError>;
 
@@ -202,7 +202,7 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
         original_balance: &EncryptedBalance,
         transfers: &[(PublicKey, <Self::Amount as Amount>::Target)],
         sender_pk: &PublicKey,
-        sender_sk: &Scalar,
+        sender_sk: &SecretKey,
         rng: &mut T,
     ) -> Result<Transaction<A>, TransactionError> {
         let num_of_transfers = transfers.len();
@@ -354,7 +354,7 @@ fn do_create_transaction<A: Amount>(
     blindings: &[Scalar],
     blinding_for_transaction_value: &Scalar,
     sender_pk: &PublicKey,
-    sender_sk: &Scalar,
+    sender_sk: &SecretKey,
 ) -> Result<Transaction<A>, TransactionError> {
     // Must have transfers.
     assert!(!transfers.is_empty());
@@ -363,13 +363,12 @@ fn do_create_transaction<A: Amount>(
     // Not too many transfers to be included.
     assert!(transfers.len() <= MAX_NUM_OF_TRANSFERS);
 
-    let sk = SecretKey::from(*sender_sk);
     let mut values_to_commit: Vec<u64> = transfers
         .iter()
         .map(|(_pk, v)| (Into::<u64>::into(*v)))
         .collect();
     let sender_initial_balance: A::Target =
-        A::try_decrypt_from(&sk, original_balance).ok_or(TransactionError::Decryption)?;
+        A::try_decrypt_from(sender_sk, original_balance).ok_or(TransactionError::Decryption)?;
     let sender_final_balance: <A as Amount>::Target = transfers
         .iter()
         .try_fold(sender_initial_balance, |acc, &(_pk, v)| acc.checked_sub(&v))
@@ -417,7 +416,7 @@ fn do_create_transaction<A: Amount>(
                 .first()
                 .map(|t| ciphertext_points_random_term_last(t))
                 .expect("Checked nonempty earlier"),
-            sender_sk,
+            &sender_sk.get_scalar(),
             blinding_for_transaction_value,
         )
         .map_err(TransactionError::BulletProofs)?;
@@ -437,7 +436,7 @@ fn do_create_transaction<A: Amount>(
                 .iter()
                 .map(|t| ciphertext_points_random_term_last(t))
                 .collect(),
-            sender_sk,
+            &sender_sk.get_scalar(),
             &blinding_for_transaction_value,
         )
         .map_err(TransactionError::BulletProofs)?;
@@ -663,7 +662,7 @@ mod tests {
             }
             Some((
                 mut csprng,
-                (sk_scalar, _sender_sk, sender_pk),
+                (_sk_scalar, sender_sk, sender_pk),
                 (
                     _sender_initial_balance,
                     _sender_final_balance,
@@ -686,7 +685,7 @@ mod tests {
                     &sender_initial_encrypted_balance,
                     &[(receiver_pk, transaction_value.inner())],
                     &sender_pk,
-                    &sk_scalar,
+                    &sender_sk,
                     &mut csprng,
                 )
                 .expect("Should be able to create transaction");
@@ -729,7 +728,7 @@ mod tests {
             }
             Some((
                 mut csprng,
-                (sk_scalar, _sender_sk, sender_pk),
+                (_sk_scalar, sender_sk, sender_pk),
                 (
                     _sender_initial_balance,
                     _sender_final_balance,
@@ -744,7 +743,7 @@ mod tests {
                     &sender_initial_encrypted_balance,
                     &transfers,
                     &sender_pk,
-                    &sk_scalar,
+                    &sender_sk,
                     &mut csprng,
                 )
                 .expect("Should be able to create transaction");
@@ -797,7 +796,7 @@ mod tests {
             &sender_initial_encrypted_balance,
             &[(receiver_pk, transaction_value)],
             &sender_pk,
-            &sk_scalar,
+            &sender_sk,
         )
         .expect("Should be able to create transaction");
 
@@ -857,7 +856,7 @@ mod tests {
             }
             Some((
                 mut csprng,
-                (sk_scalar, sender_sk, sender_pk),
+                (_sk_scalar, sender_sk, sender_pk),
                 (
                     _sender_initial_balance,
                     sender_final_balance,
@@ -872,7 +871,7 @@ mod tests {
                     &sender_initial_encrypted_balance,
                     &transfers[..],
                     &sender_pk,
-                    &sk_scalar,
+                    &sender_sk,
                     &mut csprng,
                 )
                 .expect("Should be able to create transaction");
