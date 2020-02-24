@@ -10,14 +10,14 @@ use rand::thread_rng;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
-use super::amount::Amount;
-use super::constants::MERLIN_CONFIDENTIAL_TRANSACTION_LABEL;
-use super::constants::RANDOM_PK_TO_PAD_TRANSACTIONS;
-use super::utils::{ciphertext_points_random_term_last, RistrettoPointTuple};
-use super::TransactionError;
-use crate::constants::MAX_NUM_OF_TRANSFERS;
-use crate::constants::{BASE_POINT, BP_GENS, PC_GENS};
+use crate::amount::Amount;
+use crate::constants::{
+    BASE_POINT, BP_GENS, MAX_NUM_OF_TRANSFERS, MERLIN_CONFIDENTIAL_TRANSACTION_LABEL, PC_GENS,
+    RANDOM_PK_TO_PAD_TRANSACTIONS,
+};
+use crate::utils::{ciphertext_points_random_term_last, RistrettoPointTuple};
 use crate::{Ciphertext, PublicKey, SecretKey};
+use crate::{TransactionError, TransactionSerdeError};
 
 pub type EncryptedBalance = Ciphertext;
 
@@ -157,6 +157,33 @@ impl<A: Amount> Transaction<A> {
             .zip(self.receiver_transactions())
             .map(|(original, transaction)| original + transaction)
             .collect()
+    }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>, TransactionSerdeError> {
+        let version = 0u8;
+        let encoded = bincode::serialize(self).map_err(TransactionSerdeError::Underlying)?;
+        let mut buf = Vec::with_capacity(encoded.len() + 1);
+        buf.extend(&version.to_ne_bytes());
+        buf.extend_from_slice(&encoded);
+        Ok(buf)
+    }
+
+    pub fn from_bytes(slice: &[u8]) -> Result<Self, TransactionSerdeError> {
+        if slice.is_empty() {
+            return Err(TransactionSerdeError::Format);
+        }
+        let version = u8::from_ne_bytes([slice[0]]);
+        if version != 0u8 {
+            return Err(TransactionSerdeError::Version(version));
+        }
+        let transaction: Self =
+            bincode::deserialize(&slice[1..]).map_err(TransactionSerdeError::Underlying)?;
+        if transaction.transfers.is_empty()
+            || transaction.commitments.len() != transaction.transfers.len() + 1
+        {
+            return Err(TransactionSerdeError::Malformed);
+        }
+        Ok(transaction)
     }
 }
 
@@ -645,7 +672,7 @@ mod tests {
             .map(|(a, b, c, d)| (a, b, c, d.into_iter().next().unwrap()))
     }
 
-    fn create_and_verify_one_to_one_transaction<T>(seed: u64) -> TestResult
+    fn create_one_to_one_transaction<T>(seed: u64) -> Option<Transaction<T>>
     where
         T: Copy
             + std::fmt::Debug
@@ -656,11 +683,8 @@ mod tests {
             + std::iter::Sum,
         Standard: Distribution<T>,
     {
-        match setup_from_seed::<T>(seed) {
-            None => {
-                return TestResult::discard();
-            }
-            Some((
+        setup_from_seed::<T>(seed).map(
+            |(
                 mut csprng,
                 (_sk_scalar, sender_sk, sender_pk),
                 (
@@ -680,17 +704,55 @@ mod tests {
                     _sender_transaction,
                     _receiver_transaction,
                 ),
-            )) => {
-                let transaction = Transaction::<T>::create_transaction_with_rng(
+            )| {
+                Transaction::<T>::create_transaction_with_rng(
                     &sender_initial_encrypted_balance,
                     &[(receiver_pk, transaction_value.inner())],
                     &sender_pk,
                     &sender_sk,
                     &mut csprng,
                 )
-                .expect("Should be able to create transaction");
-                assert!(transaction.verify_transaction().is_ok());
+                .expect("Should be able to create transaction")
+            },
+        )
+    }
 
+    #[quickcheck]
+    fn serde_one_to_one_transaction_u32(seed: u64) -> TestResult {
+        match create_one_to_one_transaction::<u32>(seed) {
+            None => {
+                return TestResult::discard();
+            }
+            Some(transaction) => {
+                assert_eq!(
+                    transaction.to_bytes().unwrap(),
+                    Transaction::<u32>::from_bytes(&transaction.to_bytes().unwrap())
+                        .unwrap()
+                        .to_bytes()
+                        .unwrap(),
+                );
+                TestResult::passed()
+            }
+        }
+    }
+
+    fn create_and_verify_one_to_one_transaction<T>(seed: u64) -> TestResult
+    where
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        match create_one_to_one_transaction::<T>(seed) {
+            None => {
+                return TestResult::discard();
+            }
+            Some(transaction) => {
+                assert!(transaction.verify_transaction().is_ok());
                 TestResult::passed()
             }
         }
@@ -711,6 +773,61 @@ mod tests {
         create_and_verify_one_to_one_transaction::<u64>(seed)
     }
 
+    fn create_one_to_n_transaction<T>(seed: u64, n: u8) -> Option<Transaction<T>>
+    where
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        setup_from_seed_and_num_of_transfers::<T>(seed, n).map(
+            |(
+                mut csprng,
+                (_sk_scalar, sender_sk, sender_pk),
+                (
+                    _sender_initial_balance,
+                    _sender_final_balance,
+                    _sender_initial_balance_blinding,
+                    sender_initial_encrypted_balance,
+                ),
+                info,
+            )| {
+                let transfers: Vec<(PublicKey, <T as Amount>::Target)> =
+                    info.iter().map(|x| (x.1, x.5.inner())).collect();
+                Transaction::<T>::create_transaction_with_rng(
+                    &sender_initial_encrypted_balance,
+                    &transfers,
+                    &sender_pk,
+                    &sender_sk,
+                    &mut csprng,
+                )
+                .expect("Should be able to create transaction")
+            },
+        )
+    }
+
+    #[quickcheck]
+    fn serde_one_to_n_transaction_u32(seed: u64, n: u8) -> TestResult {
+        match create_one_to_n_transaction::<u32>(seed, n) {
+            None => {
+                return TestResult::discard();
+            }
+            Some(transaction) => {
+                let bytes = transaction.to_bytes().unwrap();
+                let new_transaction = Transaction::<u32>::from_bytes(&bytes).unwrap();
+                assert_eq!(
+                    transaction.to_bytes().unwrap(),
+                    new_transaction.to_bytes().unwrap(),
+                );
+                TestResult::passed()
+            }
+        }
+    }
+
     fn create_and_verify_one_to_n_transaction<T>(seed: u64, n: u8) -> TestResult
     where
         T: Copy
@@ -722,32 +839,11 @@ mod tests {
             + std::iter::Sum,
         Standard: Distribution<T>,
     {
-        match setup_from_seed_and_num_of_transfers::<T>(seed, n) {
+        match create_one_to_n_transaction::<T>(seed, n) {
             None => {
                 return TestResult::discard();
             }
-            Some((
-                mut csprng,
-                (_sk_scalar, sender_sk, sender_pk),
-                (
-                    _sender_initial_balance,
-                    _sender_final_balance,
-                    _sender_initial_balance_blinding,
-                    sender_initial_encrypted_balance,
-                ),
-                info,
-            )) => {
-                let transfers: Vec<(PublicKey, <T as Amount>::Target)> =
-                    info.iter().map(|x| (x.1, x.5.inner())).collect();
-                let transaction = Transaction::<T>::create_transaction_with_rng(
-                    &sender_initial_encrypted_balance,
-                    &transfers,
-                    &sender_pk,
-                    &sender_sk,
-                    &mut csprng,
-                )
-                .expect("Should be able to create transaction");
-                my_debug!(&transaction.verify_transaction());
+            Some(transaction) => {
                 assert!(transaction.verify_transaction().is_ok());
                 TestResult::passed()
             }
