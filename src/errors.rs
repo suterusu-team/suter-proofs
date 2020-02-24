@@ -1,3 +1,4 @@
+use bincode::Error as BCError;
 use bulletproofs::ProofError as BPProofError;
 use thiserror::Error;
 
@@ -15,4 +16,16 @@ pub enum TransactionError {
     Decryption,
     #[error("Overflow while doing arithmetic operations")]
     Overflow,
+}
+
+#[derive(Error, Debug)]
+pub enum TransactionSerdeError {
+    #[error("Underlying serde Error: {0}")]
+    Underlying(BCError),
+    #[error("Unknown transaction version: {0}")]
+    Version(u8),
+    #[error("Invalid format")]
+    Format,
+    #[error("Transaction malformed")]
+    Malformed,
 }
