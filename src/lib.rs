@@ -9,11 +9,12 @@ extern crate quickcheck_macros;
 
 #[macro_use]
 mod macros;
-pub mod amount;
+mod amount;
+pub use amount::Amount;
 pub mod confidential;
 pub mod constants;
 mod errors;
 pub use errors::{TransactionError, TransactionSerdeError};
 pub mod crypto;
-pub(crate) mod utils;
 pub use crypto::{Ciphertext, PublicKey, Scalar, SecretKey};
+pub(crate) mod utils;

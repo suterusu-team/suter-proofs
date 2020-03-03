@@ -1,9 +1,8 @@
 use rand_core::OsRng;
 
-use suter_proofs::amount::Amount;
 use suter_proofs::confidential::ConfidentialTransaction;
 use suter_proofs::confidential::Transaction;
-use suter_proofs::{PublicKey, SecretKey};
+use suter_proofs::{Amount, PublicKey, SecretKey};
 
 fn main() {
     let mut csprng = OsRng;

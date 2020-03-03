@@ -10,7 +10,6 @@ use rand::thread_rng;
 use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
-use crate::amount::Amount;
 use crate::constants::{
     BASE_POINT, BP_GENS, MAX_NUM_OF_TRANSFERS, MERLIN_CONFIDENTIAL_TRANSACTION_LABEL, PC_GENS,
     RANDOM_PK_TO_PAD_TRANSACTIONS,
@@ -20,6 +19,7 @@ use crate::crypto::{
     to_elgamal_ristretto_secret_key,
 };
 use crate::utils::{ciphertext_points_random_term_last, RistrettoPointTuple};
+use crate::Amount;
 use crate::{Ciphertext, PublicKey, SecretKey};
 use crate::{TransactionError, TransactionSerdeError};
 

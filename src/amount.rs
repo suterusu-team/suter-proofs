@@ -10,12 +10,12 @@ use crate::crypto::{to_elgamal_ristretto_public_key, to_elgamal_ristretto_secret
 use crate::{Ciphertext, PublicKey, SecretKey};
 
 /// Represents some amount of type {u8,u16,u32,u64} which can be encrypted and decrypted.
-/// This trait can be viewed as a wrapper to target types.
-/// private::Sealed is used to prevent any other types from implementing Amount.
-/// See https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed
+/// This trait is essentially a wrapper to target types.
+/// Only {u8,u16,u32,u64} have implemented Amount, and only they can implement Amount.
 pub trait Amount: Sized + private::Sealed {
     type Target: Copy + std::fmt::Debug + Integer + Zero + CheckedAdd + CheckedSub + Into<u64>;
 
+    /// Create a new Amount from the target type.
     fn new(target: <Self as Amount>::Target) -> Self;
 
     /// Get the inner data of this wrapper.
@@ -25,12 +25,15 @@ pub trait Amount: Sized + private::Sealed {
         <Self as Amount>::Target::zero()
     }
 
+    /// The bit size of the wrapped type.
     fn bit_size() -> usize;
 
+    /// Convert the wrapped data to u64.
     fn to_u64(&self) -> u64 {
         self.inner().into()
     }
 
+    /// Convert the amount to a point of the Ristretto group.
     fn to_point(&self) -> RistrettoPoint {
         Scalar::from(self.to_u64()) * BASE_POINT
     }
@@ -38,21 +41,29 @@ pub trait Amount: Sized + private::Sealed {
     // Elgamal encryption with balances raised from base point.
     // This makes ElGamal encryption additively homomorphic.
     // See also zether paper https://eprint.iacr.org/2019/191.pdf
+    /// Encrypt the amount with the provide public key.
     fn encrypt_with(&self, pk: &PublicKey) -> Ciphertext {
         let pk = to_elgamal_ristretto_public_key(pk);
         pk.encrypt(&self.to_point())
     }
 
+    /// Get the decrypted point in the Ristretto group.
     fn get_decrypted_point(sk: &SecretKey, ciphertext: &Ciphertext) -> RistrettoPoint {
         let sk = to_elgamal_ristretto_secret_key(sk);
         sk.decrypt(&ciphertext)
     }
 
+    // TODO: Currently we obtain decrypted amount with brute force. We may also use lookup table.
+    /// Decrypt the ciphertext with sk, and then try to convert Ristretto point to an amount.
+    /// Converting Ristretto point to an amount may fail.
     fn try_decrypt_from(
         sk: &SecretKey,
         ciphertext: &Ciphertext,
     ) -> Option<<Self as Amount>::Target>;
 
+    /// Accelerate try_decrypt_from with a guess. If the guessed amount is the amount
+    /// corresponding to the decrypted Ristretto point. Then the decryption will be faster.
+    /// This function is otherwise the same as try_decrypt_from.
     fn try_decrypt_from_with_guess(
         sk: &SecretKey,
         ciphertext: &Ciphertext,
@@ -66,6 +77,8 @@ pub trait Amount: Sized + private::Sealed {
 }
 
 mod private {
+    // private::Sealed is used to prevent any other types from implementing Amount.
+    // See https://rust-lang.github.io/api-guidelines/future-proofing.html#sealed-traits-protect-against-downstream-implementations-c-sealed
     pub trait Sealed {}
     impl Sealed for u8 {}
     impl Sealed for u16 {}
@@ -78,6 +91,7 @@ macro_rules! impl_amount {
         impl Amount for $t {
             type Target = $t;
 
+            #[inline]
             fn new(target: <Self as Amount>::Target) -> Self {
                 target
             }
@@ -87,18 +101,11 @@ macro_rules! impl_amount {
                 *self
             }
 
+            #[inline]
             fn bit_size() -> usize {
                 $bit_size
             }
 
-            // TODO: Currently we obtain decrypted amount with brute force. We may also use lookup table.
-            // Let $g$ be the base point, $y$ be the public key of the reciever,
-            // $f$ be a mapping from scalar to the group, $m$ be the amount of money ransferred,
-            // maybe we should store $(f(m)*y^r, g^m*y^r, g^r)$ as ciphertext.
-            // This way the reciever is able to recover plaintext with his secret key.
-            // But this tuple is only additively homomorphic in the second and the last componnect.
-            // And we need to store the entire transaction history.
-            // This seems to be not worthwhile.
             fn try_decrypt_from(
                 sk: &SecretKey,
                 ciphertext: &Ciphertext,
