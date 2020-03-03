@@ -19,7 +19,7 @@ pub static MAX_NUM_OF_TRANSFERS: usize = MAX_PARTIES - 1;
 lazy_static! {
     pub static ref PC_GENS: PedersenGens = PedersenGens::default();
     pub static ref BP_GENS: BulletproofGens = BulletproofGens::new(MAX_BITS, MAX_PARTIES);
-    pub static ref RANDOM_PK_TO_PAD_TRANSACTIONS: PublicKey = PublicKey::from(
+    pub static ref RANDOM_PK_TO_PAD_TRANSACTIONS: PublicKey = PublicKey::from_point(
         RistrettoPoint::hash_from_bytes::<Sha512>(RANDOM_RISTRETTO_POINT_HASH_INPUT)
     );
 }
