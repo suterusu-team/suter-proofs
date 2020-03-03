@@ -15,6 +15,10 @@ use crate::constants::{
     BASE_POINT, BP_GENS, MAX_NUM_OF_TRANSFERS, MERLIN_CONFIDENTIAL_TRANSACTION_LABEL, PC_GENS,
     RANDOM_PK_TO_PAD_TRANSACTIONS,
 };
+use crate::crypto::{
+    from_elgamal_ristretto_public_key, to_elgamal_ristretto_public_key,
+    to_elgamal_ristretto_secret_key,
+};
 use crate::utils::{ciphertext_points_random_term_last, RistrettoPointTuple};
 use crate::{Ciphertext, PublicKey, SecretKey};
 use crate::{TransactionError, TransactionSerdeError};
@@ -23,11 +27,12 @@ pub type EncryptedBalance = Ciphertext;
 
 /// Create a ciphertext with the specified plain value and random scalar.
 pub fn new_ciphertext(pk: &PublicKey, value: u64, blinding: &Scalar) -> Ciphertext {
+    let pk = to_elgamal_ristretto_public_key(pk);
     let tuple = RistrettoPointTuple {
         random_term: blinding * BASE_POINT,
         payload_term: Scalar::from(value) * BASE_POINT + blinding * pk.get_point(),
     };
-    tuple.ciphertext_for(pk)
+    tuple.ciphertext_for(&pk)
 }
 
 // TODO: Evaluate the trade-off of using BatchZetherProof for all transactions.
@@ -85,14 +90,14 @@ impl<A: Amount> Transaction<A> {
     pub fn effective_sender_transactions(&self) -> Vec<&EncryptedBalance> {
         self.transfers
             .iter()
-            .filter(|(_s, r)| r.pk != self.sender_pk())
+            .filter(|(_s, r)| r.pk != to_elgamal_ristretto_public_key(&self.sender_pk()))
             .map(|(s, _r)| s)
             .collect()
     }
 
     /// Get the public key of sender
     pub fn sender_pk(&self) -> PublicKey {
-        self.original_balance.pk
+        from_elgamal_ristretto_public_key(&self.original_balance.pk)
     }
 
     fn sender_pk_point(&self) -> RistrettoPoint {
@@ -108,14 +113,17 @@ impl<A: Amount> Transaction<A> {
     pub fn effective_receiver_transactions(&self) -> Vec<&EncryptedBalance> {
         self.transfers
             .iter()
-            .filter(|(_s, r)| r.pk != self.sender_pk())
+            .filter(|(_s, r)| r.pk != to_elgamal_ristretto_public_key(&self.sender_pk()))
             .map(|(_s, r)| r)
             .collect()
     }
 
     /// Get the public keys of receivers
     pub fn receiver_pks(&self) -> Vec<PublicKey> {
-        self.transfers.iter().map(|(_s, r)| r.pk).collect()
+        self.transfers
+            .iter()
+            .map(|(_s, r)| from_elgamal_ristretto_public_key(&r.pk))
+            .collect()
     }
 
     fn receiver_pks_points(&self) -> Vec<RistrettoPoint> {
@@ -433,17 +441,17 @@ fn do_create_transaction<A: Amount>(
             &values_to_commit,
             &blindings,
             A::bit_size(),
-            &sender_pk.get_point(),
-            &receiver_pks
+            sender_pk.as_point(),
+            receiver_pks
                 .first()
                 .expect("Checked nonempty earlier")
-                .get_point(),
+                .as_point(),
             &ciphertext_points_random_term_last(&sender_final_encrypted_balance),
             &sender_transactions
                 .first()
                 .map(|t| ciphertext_points_random_term_last(t))
                 .expect("Checked nonempty earlier"),
-            &sender_sk.get_scalar(),
+            &to_elgamal_ristretto_secret_key(sender_sk).get_scalar(),
             blinding_for_transaction_value,
         )
         .map_err(TransactionError::BulletProofs)?;
@@ -456,14 +464,14 @@ fn do_create_transaction<A: Amount>(
             &values_to_commit,
             &blindings,
             A::bit_size(),
-            &sender_pk.get_point(),
-            &receiver_pks.iter().map(|pk| pk.get_point()).collect(),
+            sender_pk.as_point(),
+            &receiver_pks.iter().map(|pk| pk.into_point()).collect(),
             &ciphertext_points_random_term_last(&sender_final_encrypted_balance),
             sender_transactions
                 .iter()
                 .map(|t| ciphertext_points_random_term_last(t))
                 .collect(),
-            &sender_sk.get_scalar(),
+            &to_elgamal_ristretto_secret_key(sender_sk).get_scalar(),
             &blinding_for_transaction_value,
         )
         .map_err(TransactionError::BulletProofs)?;
@@ -498,9 +506,8 @@ mod tests {
         Standard: Distribution<T>,
     {
         let mut csprng: ChaCha20Rng = SeedableRng::seed_from_u64(seed);
-        let sk_scalar = Scalar::random(&mut csprng);
-        let sk = SecretKey::from(sk_scalar);
-        let pk = PublicKey::from(&sk);
+        let sk = SecretKey::generate_with(&mut csprng);
+        let pk = sk.to_public();
         let value = Rng::gen::<T>(&mut csprng);
         let blinding = Scalar::random(&mut csprng);
         let ciphertext = new_ciphertext(&pk, value.to_u64(), &blinding);
@@ -536,8 +543,8 @@ mod tests {
         num_of_transfers: u8,
     ) -> Option<(
         ChaCha20Rng,
-        // sender_sk_scalar, sender_sk, sender_pk
-        (Scalar, SecretKey, PublicKey),
+        // sender_sk, sender_pk
+        (SecretKey, PublicKey),
         // sender_initial_balance, sender_final_balance, sender_initial_balance_blinding, sender_initial_encrypted_balance
         (T, T, Scalar, EncryptedBalance),
         // receiver_sk, receiver_pk, receiver_initial_balance, receiver_initial_balance_blinding, receiver_initial_encrypted_balance, transaction_value, transaction_blinding, sender_transaction, receiver_transaction
@@ -571,16 +578,15 @@ mod tests {
             n
         };
         let mut csprng: ChaCha20Rng = SeedableRng::seed_from_u64(seed);
-        let sk_scalar = Scalar::random(&mut csprng);
-        let sender_sk = SecretKey::from(sk_scalar);
-        let sender_pk = PublicKey::from(&sender_sk);
+        let sender_sk = SecretKey::generate_with(&mut csprng);
+        let sender_pk = sender_sk.to_public();
         // TODO: u16 takes reasonable time to finish.
         // let sender_final_balance = Rng::gen::<T>(&mut csprng);
         let sender_final_balance = T::from(Rng::gen::<u16>(&mut csprng));
         let info: Vec<_> = (1..=num_of_transfers)
             .map(|_i| {
-                let receiver_sk = SecretKey::new(&mut csprng);
-                let receiver_pk = PublicKey::from(&receiver_sk);
+                let receiver_sk = SecretKey::generate_with(&mut csprng);
+                let receiver_pk = receiver_sk.to_public();
                 // Don't use large transaction value to avoid overflow
                 let transaction_value = T::from(Rng::gen::<u8>(&mut csprng) as u16);
                 let transaction_blinding = Scalar::random(&mut csprng);
@@ -626,7 +632,7 @@ mod tests {
         );
         return Some((
             csprng,
-            (sk_scalar, sender_sk, sender_pk),
+            (sender_sk, sender_pk),
             (
                 sender_initial_balance,
                 sender_final_balance,
@@ -641,8 +647,8 @@ mod tests {
         seed: u64,
     ) -> Option<(
         ChaCha20Rng,
-        // sender_sk_scalar, sender_sk, sender_pk
-        (Scalar, SecretKey, PublicKey),
+        // sender_sk, sender_pk
+        (SecretKey, PublicKey),
         // sender_initial_balance, sender_final_balance, sender_initial_balance_blinding, sender_initial_encrypted_balance
         (T, T, Scalar, EncryptedBalance),
         // receiver_sk, receiver_pk, receiver_initial_balance, receiver_initial_balance_blinding, receiver_initial_encrypted_balance, transaction_value, transaction_blinding, sender_transaction, receiver_transaction
@@ -686,7 +692,7 @@ mod tests {
         setup_from_seed::<T>(seed).map(
             |(
                 mut csprng,
-                (_sk_scalar, sender_sk, sender_pk),
+                (sender_sk, sender_pk),
                 (
                     _sender_initial_balance,
                     _sender_final_balance,
@@ -787,7 +793,7 @@ mod tests {
         setup_from_seed_and_num_of_transfers::<T>(seed, n).map(
             |(
                 mut csprng,
-                (_sk_scalar, sender_sk, sender_pk),
+                (sender_sk, sender_pk),
                 (
                     _sender_initial_balance,
                     _sender_final_balance,
@@ -879,11 +885,10 @@ mod tests {
         let receiver_final_balance = &receiver_initial_balance + &transaction_value;
 
         let mut csprng = OsRng;
-        let sk_scalar = Scalar::random(&mut csprng);
-        let sender_sk = SecretKey::from(sk_scalar);
-        let sender_pk = PublicKey::from(&sender_sk);
-        let receiver_sk = SecretKey::new(&mut csprng);
-        let receiver_pk = PublicKey::from(&receiver_sk);
+        let sender_sk = SecretKey::generate_with(&mut csprng);
+        let sender_pk = sender_sk.to_public();
+        let receiver_sk = SecretKey::generate_with(&mut csprng);
+        let receiver_pk = receiver_sk.to_public();
         let sender_initial_encrypted_balance = sender_initial_balance.encrypt_with(&sender_pk);
         let receiver_initial_encrypted_balance =
             receiver_initial_balance.encrypt_with(&receiver_pk);
@@ -952,7 +957,7 @@ mod tests {
             }
             Some((
                 mut csprng,
-                (_sk_scalar, sender_sk, sender_pk),
+                (sender_sk, sender_pk),
                 (
                     _sender_initial_balance,
                     sender_final_balance,

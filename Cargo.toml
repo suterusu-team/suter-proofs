@@ -24,6 +24,7 @@ anyhow = "1.0.26"
 thiserror = "1.0.10"
 num = "0.2.1"
 bincode = "1.2.1"
+schnorrkel = { git = "https://github.com/w3f/schnorrkel.git", rev = "c0f9e40", features = ["serde"] }
 
 [dev-dependencies]
 bincode = "1.2.1"

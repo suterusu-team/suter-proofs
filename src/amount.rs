@@ -6,6 +6,7 @@ use curve25519_dalek::traits::Identity;
 use num::{CheckedAdd, CheckedSub, Integer, Zero};
 
 use crate::constants::BASE_POINT;
+use crate::crypto::{to_elgamal_ristretto_public_key, to_elgamal_ristretto_secret_key};
 use crate::{Ciphertext, PublicKey, SecretKey};
 
 /// Represents some amount of type {u8,u16,u32,u64} which can be encrypted and decrypted.
@@ -34,9 +35,16 @@ pub trait Amount: Sized + private::Sealed {
         Scalar::from(self.to_u64()) * BASE_POINT
     }
 
-    fn encrypt_with(&self, pk: &PublicKey) -> Ciphertext;
+    // Elgamal encryption with balances raised from base point.
+    // This makes ElGamal encryption additively homomorphic.
+    // See also zether paper https://eprint.iacr.org/2019/191.pdf
+    fn encrypt_with(&self, pk: &PublicKey) -> Ciphertext {
+        let pk = to_elgamal_ristretto_public_key(pk);
+        pk.encrypt(&self.to_point())
+    }
 
     fn get_decrypted_point(sk: &SecretKey, ciphertext: &Ciphertext) -> RistrettoPoint {
+        let sk = to_elgamal_ristretto_secret_key(sk);
         sk.decrypt(&ciphertext)
     }
 
@@ -83,14 +91,7 @@ macro_rules! impl_amount {
                 $bit_size
             }
 
-            // Elgamal encryption with balances raised from base point.
-            // This makes ElGamal encryption additively homomorphic.
-            // See also zether paper https://eprint.iacr.org/2019/191.pdf
-            fn encrypt_with(&self, pk: &PublicKey) -> Ciphertext {
-                pk.encrypt(&self.to_point())
-            }
-
-            // TODO: Brute force currently is the only viable way.
+            // TODO: Currently we obtain decrypted amount with brute force. We may also use lookup table.
             // Let $g$ be the base point, $y$ be the public key of the reciever,
             // $f$ be a mapping from scalar to the group, $m$ be the amount of money ransferred,
             // maybe we should store $(f(m)*y^r, g^m*y^r, g^r)$ as ciphertext.
@@ -125,13 +126,12 @@ impl_amount!(u64, 64, std::u64::MAX);
 mod tests {
     use super::*;
 
-    use elgamal_ristretto::{private::SecretKey, public::PublicKey};
     use rand_core::OsRng;
 
     fn randomly_encrypt_and_decrypt(x: u32) -> Option<u32> {
         let mut csprng = OsRng;
-        let sk = SecretKey::new(&mut csprng);
-        let pk = PublicKey::from(&sk);
+        let sk = SecretKey::generate_with(&mut csprng);
+        let pk = sk.to_public();
         u32::try_decrypt_from(&sk, &x.encrypt_with(&pk))
     }
 
@@ -139,17 +139,5 @@ mod tests {
     fn encrypt_and_decrypt_should_be_identity(xs: Vec<u32>) -> bool {
         xs.into_iter()
             .all(|x| x == randomly_encrypt_and_decrypt(x).unwrap())
-    }
-
-    fn fake_encrypt_and_decrypt(x: u32) -> Option<u32> {
-        let sk = SecretKey::from(Scalar::from(0 as u32));
-        let pk = PublicKey::from(&sk);
-        u32::try_decrypt_from(&sk, &x.encrypt_with(&pk))
-    }
-
-    #[quickcheck]
-    fn fake_encrypt_and_decrypt_should_be_identity(xs: Vec<u32>) -> bool {
-        xs.into_iter()
-            .all(|x| x == fake_encrypt_and_decrypt(x).unwrap())
     }
 }

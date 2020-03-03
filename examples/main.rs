@@ -7,15 +7,15 @@ use suter_proofs::{PublicKey, SecretKey};
 
 fn main() {
     let mut csprng = OsRng;
-    let sender_sk = SecretKey::new(&mut csprng);
-    let sender_pk = PublicKey::from(&sender_sk);
+    let sender_sk = SecretKey::generate_with(&mut csprng);
+    let sender_pk = sender_sk.to_public();
     let receiver_initial_balances: Vec<u64> = vec![1, 10, 100];
     let transaction_values: Vec<u64> = vec![8, 88, 888];
     let receivers_info: Vec<_> = receiver_initial_balances
         .iter()
         .map(|receiver_initial_balance| {
-            let receiver_sk = SecretKey::new(&mut csprng);
-            let receiver_pk = PublicKey::from(&receiver_sk);
+            let receiver_sk = SecretKey::generate_with(&mut csprng);
+            let receiver_pk = receiver_sk.to_public();
             let receiver_initial_encrypted_balance =
                 receiver_initial_balance.encrypt_with(&receiver_pk);
             (

@@ -1,4 +1,5 @@
-use crate::{Ciphertext, PublicKey};
+use crate::crypto::ERPublicKey;
+use crate::Ciphertext;
 use curve25519_dalek::ristretto::RistrettoPoint;
 
 /// Represents two Ristretto points of the form $(m + r * y, r * g)$
@@ -17,7 +18,7 @@ impl RistrettoPointTuple {
     pub(crate) fn random_term_last(&self) -> (RistrettoPoint, RistrettoPoint) {
         ((*self).payload_term, (*self).random_term)
     }
-    pub(crate) fn ciphertext_for(&self, pk: &PublicKey) -> Ciphertext {
+    pub(crate) fn ciphertext_for(&self, pk: &ERPublicKey) -> Ciphertext {
         Ciphertext {
             pk: *pk,
             points: self.random_term_first(),
