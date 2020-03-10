@@ -1,7 +1,8 @@
-Let \(G\) be a group where the discrete logarithm problem is assumed to be hard to solve. Let \(g, \overrightarrow{g}=(g_1, g_2, \cdots), h, \overrightarrow{h}=(h_1, h_2, \cdots)\) be base points of \(G\) whose logarithm relationship is unclear.
-
+* Introduction
+This document summarize how a zero-knowledge confidential transaction scheme works and how to implement it. A confidential transaction scheme is a transaction scheme with which the transaction value and the balance of the sender and receiver are encrypted. The zero-knowledge part means that outsider can effectively learns nothing about the values, although he can verify the transaction is not fabricated. The main references are [[https://eprint.iacr.org/2017/1066][Bulletproofs]] and [[https://eprint.iacr.org/2019/191][Zether]]. We use Zether to homomorphically encrypt the transaction value so that the we can directly add/subtract ciphertext of the encrypted balance which can then be decrypted into the correct balance after the transaction. We use bulletproofs to check the transaction value is valid, i.e. it is a non-negative number within the range \([0, 2^n)\), and after the transaction the sender must still have a non-negative balance. The vanilla bulletproofs do not apply to the scenario of zether as Elgamal commitments are not fully homomorphic. We need to tweak bulletproofs to support \(\Sigma\)-protocols, i.e. interactive proof of the values commited in Bulletproofs are truly the values involved in zether, whence we obtain a complete and sound proof of a confidential transaction.
 
 * Encryption and Decryption of Balance
+From now no, Let \(G\) be a group where the discrete logarithm problem is assumed to be hard to solve. Let \(g, \overrightarrow{g}=(g_1, g_2, \cdots), h, \overrightarrow{h}=(h_1, h_2, \cdots)\) be base points of \(G\) whose logarithm relationship is unclear.
 
 Let \(y_1 = sk_1 * g\) (resp. \(y_2 = sk_2 * g\)) be public key of secret key \(sk_1\) (resp. \(sk_2\)). Assume the balance of every account is in the interval \([0, 2^n)\), where \(n\) is a small integer like 32. The ciphertexts obtained from encrypting balance \(b_1\) (resp. \(b_2\)) with public key \(y_1\) (resp. \(y_2\)) is \(c_1 = (b_1 * g + r_1 *y_1, r_1 * g)\) (resp. \(c_2 = (b_2 * g + r_2 * y_2, r_2 * g)\)), where \(r_1\) and \(r_2\) are random scalars. This is also called ElGamal Commitment.
 
@@ -49,11 +50,11 @@ We generalize Pederson Commitment to vectors. Let \((\overrightarrow{a_L}, \over
 Instead of proving \(a\) is within the range \([0, 2^n)\) directly. We prove the following equivalent equation.
 
 #+NAME: eqn:1
-\[a - \sum_{i=1}^{n} a_{L_i} \times 2^{i-1} = 0\]
+\[a - \sum_{i=1}^{n} a_{L_i} \times 2^{i-1} = 0 \text{ (eqn:1)}\]
 #+NAME: eqn:2
-\[a_{L_i} - 1 - a_{R_i} = 0, \forall i = 1, \cdots, n\]
+\[a_{L_i} - 1 - a_{R_i} = 0, \forall i = 1, \cdots, n \text{ (eqn:2)}\]
 #+NAME: eqn:3
-\[a_{R_i} * a_{L_i} = 0, \forall i = 1, \cdots, n\]
+\[a_{R_i} * a_{L_i} = 0, \forall i = 1, \cdots, n \text{ (eqn:3)}\]
 
 
 Combining [[eqn:2]] and [[eqn:3]], we have \((a_{L_i} - 1) * a_{L_i} = 0\), i.e. \(a_{L_i} = 1\) or \(a_{L_i} = 0\). Together with the first equation, we can see that \(a_{L_i}\) is the binary representation of \(a\). As we have only \(n\) \(a_{L_i}\), \(a\) is indeed within the range \([0, 2^n)\).
@@ -62,38 +63,38 @@ Denote \(\overrightarrow{y_n}\), or simply \(\overrightarrow{y}\) when \(n\) is 
 
 To verify the second equation, the verifier makes a challenge, a random scalar \(y\), to the prove. The prover proves that,
 #+NAME: eqn:4
-\[ \sum_{i=1}^{i=n} (a_{L_i} - 1 - a_{R_i}) * y^{i-1} = 0\]
+\[ \sum_{i=1}^{i=n} (a_{L_i} - 1 - a_{R_i}) * y^{i-1} = 0 \text{ (eqn:4)}\]
 
 The left side of the above equation is a polynomial of degree at most \(n-1\), so it has at most \(n-1\) roots. \(y\) is highly unlikely to be a root of the polynomial unless all coefficients are zero.
 
 Using the same argument, verifying the following equation is enough for the third equation.
 #+NAME: eqn:5
-\[ \sum_{i=1}^{i=n} (a_{L_i} * a_{R_i}) * y^{i-1} = 0\]
+\[ \sum_{i=1}^{i=n} (a_{L_i} * a_{R_i}) * y^{i-1} = 0 \text{ (eqn:5)}\]
 
 Rewrite equation [[eqn:4]] as \((\overrightarrow{a_L} - \overrightarrow{1_n} - \overrightarrow{a_R}) \cdot \overrightarrow{y_n} = 0\), rewrite equation [[eqn:5]] as \((\overrightarrow{a_L}) \cdot (\overrightarrow{a_R} \circ \overrightarrow{y_n}) = 0\), rewrite [[eqn:1]] as \(a - \overrightarrow{a_L} \cdot \overrightarrow{2_n} = 0\). Using the trick as above, we combine this equations to a single equation
 
 #+NAME: eqn:6
-\[(\overrightarrow{a_L} - \overrightarrow{1_n} - \overrightarrow{a_R}) \cdot \overrightarrow{y_n} + \overrightarrow{a_L}\cdot (\overrightarrow{a_R} \circ \overrightarrow{y_n}) * z + (a - \overrightarrow{a_L} \cdot \overrightarrow{2_n})* z^2 = 0\]
+\[(\overrightarrow{a_L} - \overrightarrow{1_n} - \overrightarrow{a_R}) \cdot \overrightarrow{y_n} + \overrightarrow{a_L}\cdot (\overrightarrow{a_R} \circ \overrightarrow{y_n}) * z + (a - \overrightarrow{a_L} \cdot \overrightarrow{2_n})* z^2 = 0 \text{ (eqn:6)}\]
 
 This equation is equivalent to
 
 #+NAME: eqn:7
-\[(\overrightarrow{a_L} - z\overrightarrow{1_n}) \cdot (\overrightarrow{a_R}\circ \overrightarrow{y_n} + z\overrightarrow{1_n}\circ \overrightarrow{y_n} + z^2 \overrightarrow{2_n}) = z^2 v + \delta(y, z)\]
+\[(\overrightarrow{a_L} - z\overrightarrow{1_n}) \cdot (\overrightarrow{a_R}\circ \overrightarrow{y_n} + z\overrightarrow{1_n}\circ \overrightarrow{y_n} + z^2 \overrightarrow{2_n}) = z^2 v + \delta(y, z) \text{ (eqn:7)}\]
 
 where \(\delta(y, z) = (z - z^2)(\overrightarrow{1_n} \cdot \overrightarrow{y_n}) - z^3 (\overrightarrow{1_n} \cdot \overrightarrow{2_n})\) is a term involves only \(y\) and \(z\).
 
 In order to make the range proof zero knowledge, we will add additional term \(\overrightarrow{s_L}x\) (resp. \(\overrightarrow{s_R}x\)) to \(\overrightarrow{a_L}\) (resp. \(\overrightarrow{a_R}\)), where \(\overrightarrow{s_L}, \overrightarrow{s_R} \in \mathbb{Z}^n\) are random vectors, \(x\) is unknown variable in \(\mathbb{Z}\). Thus the left-hand side of equation [[eqn:7]] is now a polynomial in \(x\) of degree 2. Adjust the right-hand side to a polynomial in \(x\) of degree 2, Then we have a equation of the following form
 
 #+NAME: eqn:8
-\[\overrightarrow{l(x)} \cdot \overrightarrow{r(x)} = t(x)\]
+\[\overrightarrow{l(x)} \cdot \overrightarrow{r(x)} = t(x) \text{ (eqn:8)}\]
 
 where
 #+NAME: eqn:9
-\[\overrightarrow{l(x)} = \overrightarrow{a_L} + \overrightarrow{s_L}x - z\overrightarrow{1_n}\]
+\[\overrightarrow{l(x)} = \overrightarrow{a_L} + \overrightarrow{s_L}x - z\overrightarrow{1_n} \text{ (eqn:9)}\]
 #+NAME: eqn:10
-\[\overrightarrow{r(x)} = (\overrightarrow{a_R} + \overrightarrow{s_R}x) \circ \overrightarrow{y_n} + z\overrightarrow{1_n}\circ \overrightarrow{y_n} + z^2 \overrightarrow{2_n}\]
+\[\overrightarrow{r(x)} = (\overrightarrow{a_R} + \overrightarrow{s_R}x) \circ \overrightarrow{y_n} + z\overrightarrow{1_n}\circ \overrightarrow{y_n} + z^2 \overrightarrow{2_n} \text{ (eqn:10)}\]
 #+NAME: eqn:11
-\[t(x) = t_0 + t_1 x + t_2 x^2 = z^2 v + \delta(y, z) + t_1 x + t_2 x^2\]
+\[t(x) = t_0 + t_1 x + t_2 x^2 = z^2 v + \delta(y, z) + t_1 x + t_2 x^2 \text{ (eqn:11)}\]
 
 * Range Proof
 
@@ -110,13 +111,13 @@ To verify [[eqn:11]], we compare the commitment of \(t(x)\) with the commitment 
 In our use case, we want to aggregate two range proofs. To aggregate range proofs of terms \(a^{(k)}, k = 1, \cdots, m\) are within the range \([0, 2^n)\), we have the following equations
 
 #+NAME: eqn:12
-\[ a^{(k)} - \sum_{i=1}^{n} a^{(k)}_{L_i} \times 2^{i-1} = 0, \forall k = 1, \cdots, m \]
+\[ a^{(k)} - \sum_{i=1}^{n} a^{(k)}_{L_i} \times 2^{i-1} = 0, \forall k = 1, \cdots, m \text{ (eqn:12)}\]
 #+NAME: eqn:13
-\[a^{(k)}_{L_i} - 1 - a^{(k)}_{R_i} = 0, \forall i = 1, \cdots, n, \forall k = 1, \cdots, m\]
+\[a^{(k)}_{L_i} - 1 - a^{(k)}_{R_i} = 0, \forall i = 1, \cdots, n, \forall k = 1, \cdots, m \text{ (eqn:13)}\]
 #+NAME: eqn:14
-\[a^{(k)}_{R_i} * a^{(k)}_{L_i} = 0, \forall i = 1, \cdots, n, \forall k = 1, \cdots, m\]
+\[a^{(k)}_{R_i} * a^{(k)}_{L_i} = 0, \forall i = 1, \cdots, n, \forall k = 1, \cdots, m \text{ (eqn:14)}\]
 
 Note when we concatenate all the binary representation of \(\overrightarrow{a^{(k)}_{L}}\) (resp. \(\overrightarrow{a^{(k)}_{R}}\)) into \(\overrightarrow{a_{L}}\) (resp. \(\overrightarrow{a_{R}}\)), we can condense [[eqn:13]] (resp. [[eqn:14]]) into the [[eqn:2]] (resp. [[eqn:3]]). We use the same trick as before to compress equations in [[eqn:12]], then we have
 \[(\overrightarrow{a_L} - \overrightarrow{1_{mn}} - \overrightarrow{a_R}) \cdot \overrightarrow{y_{mn}} + \overrightarrow{a_L}\cdot (\overrightarrow{a_R} \circ \overrightarrow{y_{mn}}) * z + \sum_k(a^{(k)} - \overrightarrow{a^{(k)}_{L}} \cdot \overrightarrow{2_n}) * z^{2+k} = 0\]
 
-Accordingly, we adjust terms in [[eqn:9]], [[eqn:10]] and [[eqn:11]]. After that, we can verify the proof in the same way.
+Accordingly, we adjust terms in [[eqn:9]], [[eqn:10]] and [[eqn:11]]. After that, we can verify the proof in the same way. Now we have got rid of all the roadblocks. A zero-knowledge confidential transaction scheme is here to stay.
