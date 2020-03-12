@@ -7,7 +7,7 @@ use num::{CheckedAdd, CheckedSub, Integer, Zero};
 
 use crate::constants::BASE_POINT;
 use crate::crypto::{to_elgamal_ristretto_public_key, to_elgamal_ristretto_secret_key};
-use crate::{Ciphertext, PublicKey, SecretKey};
+use crate::{EncryptedBalance, PublicKey, SecretKey};
 
 /// Represents some amount of type {u8,u16,u32,u64} which can be encrypted and decrypted.
 /// This trait is essentially a wrapper to target types.
@@ -21,6 +21,7 @@ pub trait Amount: Sized + private::Sealed {
     /// Get the inner data of this wrapper.
     fn inner(&self) -> <Self as Amount>::Target;
 
+    /// Get the element 0 in the Amount.
     fn zero() -> <Self as Amount>::Target {
         <Self as Amount>::Target::zero()
     }
@@ -42,13 +43,13 @@ pub trait Amount: Sized + private::Sealed {
     // This makes ElGamal encryption additively homomorphic.
     // See also zether paper https://eprint.iacr.org/2019/191.pdf
     /// Encrypt the amount with the provide public key.
-    fn encrypt_with(&self, pk: &PublicKey) -> Ciphertext {
+    fn encrypt_with(&self, pk: &PublicKey) -> EncryptedBalance {
         let pk = to_elgamal_ristretto_public_key(pk);
         pk.encrypt(&self.to_point())
     }
 
     /// Get the decrypted point in the Ristretto group.
-    fn get_decrypted_point(sk: &SecretKey, ciphertext: &Ciphertext) -> RistrettoPoint {
+    fn get_decrypted_point(sk: &SecretKey, ciphertext: &EncryptedBalance) -> RistrettoPoint {
         let sk = to_elgamal_ristretto_secret_key(sk);
         sk.decrypt(&ciphertext)
     }
@@ -58,7 +59,7 @@ pub trait Amount: Sized + private::Sealed {
     /// Converting Ristretto point to an amount may fail.
     fn try_decrypt_from(
         sk: &SecretKey,
-        ciphertext: &Ciphertext,
+        ciphertext: &EncryptedBalance,
     ) -> Option<<Self as Amount>::Target>;
 
     /// Accelerate try_decrypt_from with a guess. If the guessed amount is the amount
@@ -66,7 +67,7 @@ pub trait Amount: Sized + private::Sealed {
     /// This function is otherwise the same as try_decrypt_from.
     fn try_decrypt_from_with_guess(
         sk: &SecretKey,
-        ciphertext: &Ciphertext,
+        ciphertext: &EncryptedBalance,
         guess: <Self as Amount>::Target,
     ) -> Option<<Self as Amount>::Target> {
         if Self::new(guess).to_point() == Self::get_decrypted_point(sk, ciphertext) {
@@ -108,7 +109,7 @@ macro_rules! impl_amount {
 
             fn try_decrypt_from(
                 sk: &SecretKey,
-                ciphertext: &Ciphertext,
+                ciphertext: &EncryptedBalance,
             ) -> Option<<Self as Amount>::Target> {
                 let point = Self::get_decrypted_point(sk, ciphertext);
                 let mut acc: RistrettoPoint = Identity::identity();
