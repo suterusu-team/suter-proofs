@@ -4,6 +4,7 @@ pub(crate) use elgamal_ristretto::{
     private::SecretKey as ERSecretKey, public::PublicKey as ERPublicKey,
 };
 pub use schnorrkel::{PublicKey, SecretKey};
+pub type EncryptedBalance = Ciphertext;
 
 // Due to orphan rules, we can not implement Into<SecretKey> for ERSecretKey
 pub(crate) fn to_elgamal_ristretto_secret_key(sk: &SecretKey) -> ERSecretKey {

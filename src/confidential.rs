@@ -11,29 +11,17 @@ use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 use crate::constants::{
-    BASE_POINT, BP_GENS, MAX_NUM_OF_TRANSFERS, MERLIN_CONFIDENTIAL_TRANSACTION_LABEL, PC_GENS,
+    BP_GENS, MAX_NUM_OF_TRANSFERS, MERLIN_CONFIDENTIAL_TRANSACTION_LABEL, PC_GENS,
     RANDOM_PK_TO_PAD_TRANSACTIONS,
 };
 use crate::crypto::{
     from_elgamal_ristretto_public_key, to_elgamal_ristretto_public_key,
     to_elgamal_ristretto_secret_key,
 };
-use crate::utils::{ciphertext_points_random_term_last, RistrettoPointTuple};
-use crate::Amount;
-use crate::{Ciphertext, PublicKey, SecretKey};
-use crate::{TransactionError, TransactionSerdeError};
-
-pub type EncryptedBalance = Ciphertext;
-
-// Create a ciphertext with the specified plain value and random scalar.
-pub(crate) fn new_ciphertext(pk: &PublicKey, value: u64, blinding: &Scalar) -> Ciphertext {
-    let pk = to_elgamal_ristretto_public_key(pk);
-    let tuple = RistrettoPointTuple {
-        random_term: blinding * BASE_POINT,
-        payload_term: Scalar::from(value) * BASE_POINT + blinding * pk.get_point(),
-    };
-    tuple.ciphertext_for(&pk)
-}
+use crate::utils::{ciphertext_points_random_term_last, new_ciphertext};
+use crate::{
+    Amount, EncryptedBalance, PublicKey, SecretKey, TransactionError, TransactionSerdeError,
+};
 
 // TODO: Evaluate the trade-off of using BatchZetherProof for all transactions.
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -417,7 +405,7 @@ fn do_create_transaction<A: Amount>(
     );
     values_to_commit.push(sender_final_balance.into());
     let receiver_pks: Vec<PublicKey> = transfers.iter().map(|(pk, _v)| *pk).collect();
-    let sender_transactions: Vec<Ciphertext> = transfers
+    let sender_transactions: Vec<EncryptedBalance> = transfers
         .iter()
         .map(|(_, v)| {
             new_ciphertext(
@@ -427,7 +415,7 @@ fn do_create_transaction<A: Amount>(
             )
         })
         .collect();
-    let receiver_transactions: Vec<Ciphertext> = transfers
+    let receiver_transactions: Vec<EncryptedBalance> = transfers
         .iter()
         .map(|(pk, v)| new_ciphertext(pk, Into::<u64>::into(*v), blinding_for_transaction_value))
         .collect();
