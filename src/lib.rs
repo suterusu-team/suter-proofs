@@ -17,7 +17,7 @@
 //! [schnorrkel::SecretKey](schnorrkel::SecretKey). In theory, the decryption may fail,
 //! as we encrypt the amount with additional homomorphic property. This process may be irreversible.
 //! In practice, the decryption should be fast. To accelerate the decryption,
-//! a hint of the amount can be given with [Amount::try_decrypt_from_with_guess](crate::Amount::try_decrypt_from_with_guess).
+//! a hint of the amount can be given with [Amount::try_decrypt_from_with_hint](crate::Amount::try_decrypt_from_with_hint).
 //!
 //! To create a verifiable confidential transaction, we can use the method [create_transaction](crate::confidential::ConfidentialTransaction::create_transaction),
 //! the resulting transaction can be verified with [verify_transaction](crate::confidential::ConfidentialTransaction::verify_transaction) method.
