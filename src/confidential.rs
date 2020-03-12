@@ -25,8 +25,8 @@ use crate::{TransactionError, TransactionSerdeError};
 
 pub type EncryptedBalance = Ciphertext;
 
-/// Create a ciphertext with the specified plain value and random scalar.
-pub fn new_ciphertext(pk: &PublicKey, value: u64, blinding: &Scalar) -> Ciphertext {
+// Create a ciphertext with the specified plain value and random scalar.
+pub(crate) fn new_ciphertext(pk: &PublicKey, value: u64, blinding: &Scalar) -> Ciphertext {
     let pk = to_elgamal_ristretto_public_key(pk);
     let tuple = RistrettoPointTuple {
         random_term: blinding * BASE_POINT,
@@ -167,6 +167,7 @@ impl<A: Amount> Transaction<A> {
             .collect()
     }
 
+    /// Get a compact binary representation of the transaction.
     pub fn to_bytes(&self) -> Result<Vec<u8>, TransactionSerdeError> {
         let version = 0u8;
         let encoded = bincode::serialize(self).map_err(TransactionSerdeError::Underlying)?;
@@ -176,6 +177,7 @@ impl<A: Amount> Transaction<A> {
         Ok(buf)
     }
 
+    /// Convert binary representations into transactions.
     pub fn from_bytes(slice: &[u8]) -> Result<Self, TransactionSerdeError> {
         if slice.is_empty() {
             return Err(TransactionSerdeError::Format);

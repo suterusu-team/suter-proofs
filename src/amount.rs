@@ -112,7 +112,7 @@ macro_rules! impl_amount {
             ) -> Option<<Self as Amount>::Target> {
                 let point = Self::get_decrypted_point(sk, ciphertext);
                 let mut acc: RistrettoPoint = Identity::identity();
-                for i in 0..$max {
+                for i in 0..=$max {
                     if acc == point {
                         return Some(i);
                     }
