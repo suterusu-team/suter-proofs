@@ -139,7 +139,7 @@ impl<A: Amount> Transaction<A> {
         sk: &SecretKey,
         guess: <A as Amount>::Target,
     ) -> Option<<A as Amount>::Target> {
-        A::try_decrypt_from_with_guess(sk, &self.get_sender_final_encrypted_balance(), guess)
+        A::try_decrypt_from_with_hint(sk, &self.get_sender_final_encrypted_balance(), guess)
     }
 
     /// Get the final balance of receivers after transaction is applied to receiver_original_balance.
@@ -502,7 +502,7 @@ mod tests {
         let blinding = Scalar::random(&mut csprng);
         let ciphertext = new_ciphertext(&pk, value.to_u64(), &blinding);
         assert!(
-            T::try_decrypt_from_with_guess(&sk, &ciphertext, value.inner()).unwrap()
+            T::try_decrypt_from_with_hint(&sk, &ciphertext, value.inner()).unwrap()
                 == value.inner()
         )
     }
@@ -892,7 +892,7 @@ mod tests {
         .expect("Should be able to create transaction");
 
         assert_eq!(
-            u32::try_decrypt_from_with_guess(
+            u32::try_decrypt_from_with_hint(
                 &sender_sk,
                 &transaction.sender_transactions().first().unwrap(),
                 transaction_value
@@ -901,7 +901,7 @@ mod tests {
             transaction_value
         );
         assert_eq!(
-            u32::try_decrypt_from_with_guess(
+            u32::try_decrypt_from_with_hint(
                 &receiver_sk,
                 &transaction.receiver_transactions().first().unwrap(),
                 transaction_value
@@ -916,7 +916,7 @@ mod tests {
             sender_final_balance
         );
         assert_eq!(
-            u32::try_decrypt_from_with_guess(
+            u32::try_decrypt_from_with_hint(
                 &receiver_sk,
                 &transaction
                     .get_receiver_final_encrypted_balance(&[receiver_initial_encrypted_balance])
@@ -998,7 +998,7 @@ mod tests {
                     match transaction_value.checked_add(receiver_initial_balance) {
                         None => return TestResult::discard(),
                         Some(b) => assert_eq!(
-                            T::try_decrypt_from_with_guess(
+                            T::try_decrypt_from_with_hint(
                                 &receiver_sk,
                                 &receiver_final_encrypted_balance,
                                 b.inner()
