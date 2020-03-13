@@ -1,11 +1,10 @@
-Introduction
-============
+# Introduction
 
 This document summarize how a zero-knowledge confidential transaction
 scheme works and how to implement it. A confidential transaction scheme
 is a transaction scheme with which the transaction value and the balance
 of the sender and receiver are encrypted. The zero-knowledge part means
-that outsider can effectively learns nothing about the values, although
+that outsider can effectively learn nothing about the values, although
 he can verify the transaction is not fabricated. The main references are
 [Bulletproofs](https://eprint.iacr.org/2017/1066) and
 [Zether](https://eprint.iacr.org/2019/191). We use Zether to
@@ -21,8 +20,7 @@ support $\Sigma$-protocols, i.e. interactive proof of the values
 commited in Bulletproofs are truly the values involved in zether, whence
 we obtain a complete and sound proof of a confidential transaction.
 
-Encryption and Decryption of Balance
-====================================
+# Encryption and Decryption of Balance
 
 From now no, Let $G$ be a group where the discrete logarithm problem is
 assumed to be hard to solve. Let
@@ -44,8 +42,7 @@ definition of the public key $y_1 = sk_1 * g$. We then obtain $b_1$
 (resp. $b_2$) with brute force. This is feasible as $b_1, b_2$ are small
 enough.
 
-Confidential Transfer
-=====================
+# Confidential Transfer
 
 For the same public key $y$, we define the addition/subtraction of two
 ciphertexts $c_1 = (b_1 * g + r_1 * y, r_1 * g)$ and
@@ -68,8 +65,7 @@ he/she has, i.e. $b$.
 In the brave new world of cryptopia, we have no way to know what $b$ and
 $b^\star$ are, as they are both encrypted.
 
-Proof of knowledge of discrete logarithm
-========================================
+# Proof of knowledge of discrete logarithm
 
 Let\'s summarize what we need to do.
 
@@ -107,8 +103,7 @@ $[0, 2^n)$, without ever revealing the actual values. In order to do so,
 we will first commit the value, and then prove properties concerning the
 commitment.
 
-Pederson Commitment
-===================
+# Pederson Commitment
 
 We now provide another way to hide balance which also allow us prove to
 statements about the hidden balance. Given a value $v$ in the message
@@ -139,8 +134,7 @@ $PC: (\overrightarrow{a_L}, \overrightarrow{a_R}, r) \mapsto \sum a_{L_i} * g_i 
 where $h$, $g_i$ and $h_i$ are fixed base points, $r$ is called the
 blinding factor of $(\overrightarrow{a_L}, \overrightarrow{a_R})$.
 
-Zen of Range Checking
-=====================
+# Zen of Range Checking
 
 Instead of proving $a$ is within the range $[0, 2^n)$ directly. We prove
 the following equivalent equation.
@@ -215,8 +209,7 @@ $$\overrightarrow{r(x)} = (\overrightarrow{a_R} + \overrightarrow{s_R}x) \circ \
 
 $$t(x) = t_0 + t_1 x + t_2 x^2 = z^2 v + \delta(y, z) + t_1 x + t_2 x^2 \text{ (eqn:11)}$$
 
-Range Proof
-===========
+# Range Proof
 
 We now view $x$ as a chosen random scalar. Let $V$ be the Pederson
 Commitment of $v$, $T_1$ be the Pederson Commitment of $t_1$, $T_2$ be
@@ -246,8 +239,7 @@ commitment of $z^2 v + \delta(y, z) + t_1 x + t_2 x^2$. The first term
 can be calculated directly with $\tilde{t}(x), t(x)$, and the second
 term can be calculated with $V, T_1, T_2$.
 
-Aggregated Range Proof
-======================
+# Aggregated Range Proof
 
 In our use case, we want to aggregate two range proofs. To aggregate
 range proofs of terms $a^{(k)}, k = 1, \cdots, m$ are within the range
