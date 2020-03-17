@@ -185,6 +185,178 @@ impl<A: Amount> Transaction<A> {
     }
 }
 
+struct ProofBuilder<A: Amount> {
+    public_key: PublicKey,
+    secret_key: SecretKey,
+    original_balance: EncryptedBalance,
+    transfers: Vec<(PublicKey, <A as Amount>::Target)>,
+    blindings: Vec<Scalar>,
+}
+
+impl<A: Amount> ProofBuilder<A> {
+    fn new(
+        public_key: PublicKey,
+        secret_key: SecretKey,
+        original_balance: EncryptedBalance,
+        transfers: Vec<(PublicKey, <A as Amount>::Target)>,
+    ) -> Self {
+        Self {
+            public_key,
+            secret_key,
+            original_balance,
+            transfers,
+            blindings: vec![],
+        }
+    }
+
+    // Padding transfers with transferred value 0, so that we can use aggregate zether proofs.
+    // This is necessary as BatchZetherProof only supports 2^n value commitments.
+    // For some unfathomable reason, verification of transaction padded with transfers from the sender to the sender failed.
+    // TODO: fix this.
+    fn pad_transfers(&mut self) {
+        let n = self.transfers.len();
+        self.transfers.extend(
+            std::iter::repeat((*RANDOM_PK_TO_PAD_TRANSACTIONS, A::zero()))
+                .take(next_power_of_2(n + 1) - n - 1),
+        );
+    }
+
+    fn get_transfer_values(&self) -> Vec<u64> {
+        self.transfers.iter().map(|x| x.1.into()).collect()
+    }
+
+    fn generate_transaction_random_parameters<T: RngCore + CryptoRng>(&mut self, rng: &mut T) {
+        my_debug!(&self.blindings);
+        self.blindings = (0..=self.transfers.len() + 1)
+            .map(|_| Scalar::random(rng))
+            .collect();
+        my_debug!(&self.blindings);
+    }
+
+    fn get_blindings(&self) -> (&Scalar, &[Scalar]) {
+        let (left, right) = self.blindings.split_at(1);
+        my_debug!(left, right);
+        (left.first().unwrap(), right)
+    }
+
+    fn create_proof_from_rng<T: RngCore + CryptoRng>(
+        &mut self,
+        rng: &mut T,
+    ) -> Result<Transaction<A>, TransactionError> {
+        self.pad_transfers();
+        self.generate_transaction_random_parameters(rng);
+
+        let (blinding_for_transaction_value, blindings) = self.get_blindings();
+        // Must have transfers.
+        assert!(!self.transfers.is_empty());
+        // Blindings includes blindings for transfer value, and blinding for final value.
+        assert_eq!(self.transfers.len() + 1, blindings.len());
+
+        if self.transfers.len() > MAX_NUM_OF_TRANSFERS {
+            return Err(TransactionError::TooManyTransfers {
+                given: self.transfers.len(),
+                max: MAX_NUM_OF_TRANSFERS,
+            });
+        }
+
+        let mut values_to_commit: Vec<u64> = self.get_transfer_values();
+
+        let sender_initial_balance: A::Target =
+            A::try_decrypt_from(&self.secret_key, &self.original_balance)
+                .ok_or(TransactionError::Decryption)?;
+        let sender_final_balance: <A as Amount>::Target = self
+            .transfers
+            .iter()
+            .try_fold(sender_initial_balance, |acc, &(_pk, v)| acc.checked_sub(&v))
+            .ok_or(TransactionError::Overflow)?;
+        my_debug!(
+            sender_initial_balance,
+            sender_final_balance,
+            &values_to_commit
+        );
+        values_to_commit.push(sender_final_balance.into());
+        let receiver_pks: Vec<PublicKey> = self.transfers.iter().map(|(pk, _v)| *pk).collect();
+        let sender_transactions: Vec<EncryptedBalance> = self
+            .transfers
+            .iter()
+            .map(|(_, v)| {
+                new_ciphertext(
+                    &self.public_key,
+                    Into::<u64>::into(*v),
+                    blinding_for_transaction_value,
+                )
+            })
+            .collect();
+        let receiver_transactions: Vec<EncryptedBalance> = self
+            .transfers
+            .iter()
+            .map(|(pk, v)| {
+                new_ciphertext(pk, Into::<u64>::into(*v), blinding_for_transaction_value)
+            })
+            .collect();
+        let sender_final_encrypted_balance = sender_transactions
+            .iter()
+            .fold(self.original_balance, |acc, i| acc - *i);
+        let mut prover_transcript = Transcript::new(MERLIN_CONFIDENTIAL_TRANSACTION_LABEL);
+        let (proof, commitments) = if self.transfers.len() == 1 {
+            let (p, c) = ZetherProof::prove_multiple(
+                &BP_GENS,
+                &PC_GENS,
+                &mut prover_transcript,
+                &values_to_commit,
+                &blindings,
+                A::bit_size(),
+                self.public_key.as_point(),
+                receiver_pks
+                    .first()
+                    .expect("Checked nonempty earlier")
+                    .as_point(),
+                &ciphertext_points_random_term_last(&sender_final_encrypted_balance),
+                &sender_transactions
+                    .first()
+                    .map(|t| ciphertext_points_random_term_last(t))
+                    .expect("Checked nonempty earlier"),
+                &to_elgamal_ristretto_secret_key(&self.secret_key).get_scalar(),
+                blinding_for_transaction_value,
+            )
+            .map_err(TransactionError::BulletProofs)?;
+            (Proof::Zether(p), c)
+        } else {
+            let (p, c) = BatchZetherProof::prove_multiple(
+                &BP_GENS,
+                &PC_GENS,
+                &mut prover_transcript,
+                &values_to_commit,
+                &blindings,
+                A::bit_size(),
+                self.public_key.as_point(),
+                &receiver_pks.iter().map(|pk| pk.into_point()).collect(),
+                &ciphertext_points_random_term_last(&sender_final_encrypted_balance),
+                sender_transactions
+                    .iter()
+                    .map(|t| ciphertext_points_random_term_last(t))
+                    .collect(),
+                &to_elgamal_ristretto_secret_key(&self.secret_key).get_scalar(),
+                &blinding_for_transaction_value,
+            )
+            .map_err(TransactionError::BulletProofs)?;
+            (Proof::BatchZether(p), c)
+        };
+
+        my_debug!(&proof, &commitments);
+        Ok(Transaction::new(
+            self.public_key,
+            self.original_balance,
+            sender_transactions
+                .into_iter()
+                .zip(receiver_transactions)
+                .collect(),
+            commitments,
+            proof,
+        ))
+    }
+}
+
 pub trait ConfidentialTransaction {
     type Amount: Amount;
 
@@ -230,32 +402,39 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
         sender_sk: &SecretKey,
         rng: &mut T,
     ) -> Result<Transaction<A>, TransactionError> {
-        let num_of_transfers = transfers.len();
-        if num_of_transfers == 0 {
-            return Err(TransactionError::EmptyTransfers);
-        }
-        if num_of_transfers > MAX_NUM_OF_TRANSFERS {
-            return Err(TransactionError::TooManyTransfers {
-                given: num_of_transfers,
-                max: MAX_NUM_OF_TRANSFERS,
-            });
-        }
-        my_debug!(num_of_transfers, transfers);
-        let padded_transfers = &pad_transfers::<A>(transfers, sender_pk);
-        let num_of_padded_transfers = padded_transfers.len();
-        my_debug!(num_of_padded_transfers, padded_transfers);
+        let mut builder = ProofBuilder::<A>::new(
+            sender_pk.clone(),
+            sender_sk.clone(),
+            original_balance.clone(),
+            transfers.iter().map(Clone::clone).collect(),
+        );
+        builder.create_proof_from_rng(rng)
+        // let num_of_transfers = transfers.len();
+        // if num_of_transfers == 0 {
+        //     return Err(TransactionError::EmptyTransfers);
+        // }
+        // if num_of_transfers > MAX_NUM_OF_TRANSFERS {
+        //     return Err(TransactionError::TooManyTransfers {
+        //         given: num_of_transfers,
+        //         max: MAX_NUM_OF_TRANSFERS,
+        //     });
+        // }
+        // my_debug!(num_of_transfers, transfers);
+        // let padded_transfers = &pad_transfers::<A>(transfers, sender_pk);
+        // let num_of_padded_transfers = padded_transfers.len();
+        // my_debug!(num_of_padded_transfers, padded_transfers);
 
-        let (blindings, blinding_for_transaction_value) =
-            generate_transaction_random_parameters(rng, num_of_padded_transfers + 1);
-        my_debug!(&blindings, &blinding_for_transaction_value);
-        do_create_transaction::<Self::Amount>(
-            original_balance,
-            padded_transfers,
-            &blindings,
-            &blinding_for_transaction_value,
-            sender_pk,
-            sender_sk,
-        )
+        // let (blindings, blinding_for_transaction_value) =
+        //     generate_transaction_random_parameters(rng, num_of_padded_transfers + 1);
+        // my_debug!(&blindings, &blinding_for_transaction_value);
+        // do_create_transaction::<Self::Amount>(
+        //     original_balance,
+        //     padded_transfers,
+        //     &blindings,
+        //     &blinding_for_transaction_value,
+        //     sender_pk,
+        //     sender_sk,
+        // )
     }
 
     fn verify_transaction(&self) -> Result<(), TransactionError> {
@@ -336,149 +515,10 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
     }
 }
 
-fn generate_transaction_random_parameters<T: RngCore + CryptoRng>(
-    rng: &mut T,
-    num_of_blindings: usize,
-) -> (Vec<Scalar>, Scalar) {
-    (
-        (1..=num_of_blindings)
-            .map(|_| Scalar::random(rng))
-            .collect(),
-        Scalar::random(rng),
-    )
-}
 fn next_power_of_2(m: usize) -> usize {
     let m = m as u32;
-    let n = (0..=m).find(|x| 2_u32.pow(*x) > m).unwrap();
+    let n = (0..=m).find(|x| 2_u32.pow(*x) >= m).unwrap();
     2_u32.pow(n) as usize
-}
-
-// Padding transfers with transferred value 0, so that we can use aggregate zether proofs.
-// This is necessary as BatchZetherProof only supports 2^n value commitments.
-// For some unfathomable reason, verification of transaction padded with transfers from the sender to the sender failed.
-// TODO: fix this.
-fn pad_transfers<A: Amount>(
-    transfers: &[(PublicKey, <A as Amount>::Target)],
-    _pk: &PublicKey,
-) -> Vec<(PublicKey, <A as Amount>::Target)> {
-    let mut v = vec![];
-    v.extend(transfers);
-    let n = transfers.len();
-    if n > 1 {
-        v.extend(
-            std::iter::repeat((*RANDOM_PK_TO_PAD_TRANSACTIONS, A::zero()))
-                .take(next_power_of_2(n) - n - 1),
-        );
-    }
-    v
-}
-
-fn do_create_transaction<A: Amount>(
-    original_balance: &EncryptedBalance,
-    transfers: &[(PublicKey, <A as Amount>::Target)],
-    blindings: &[Scalar],
-    blinding_for_transaction_value: &Scalar,
-    sender_pk: &PublicKey,
-    sender_sk: &SecretKey,
-) -> Result<Transaction<A>, TransactionError> {
-    // Must have transfers.
-    assert!(!transfers.is_empty());
-    // Blindings includes blindings for transfer value, and blinding for final value.
-    assert_eq!(transfers.len() + 1, blindings.len());
-    // Not too many transfers to be included.
-    assert!(transfers.len() <= MAX_NUM_OF_TRANSFERS);
-
-    let mut values_to_commit: Vec<u64> = transfers
-        .iter()
-        .map(|(_pk, v)| (Into::<u64>::into(*v)))
-        .collect();
-    let sender_initial_balance: A::Target =
-        A::try_decrypt_from(sender_sk, original_balance).ok_or(TransactionError::Decryption)?;
-    let sender_final_balance: <A as Amount>::Target = transfers
-        .iter()
-        .try_fold(sender_initial_balance, |acc, &(_pk, v)| acc.checked_sub(&v))
-        .ok_or(TransactionError::Overflow)?;
-    my_debug!(
-        sender_initial_balance,
-        sender_final_balance,
-        &values_to_commit
-    );
-    values_to_commit.push(sender_final_balance.into());
-    let receiver_pks: Vec<PublicKey> = transfers.iter().map(|(pk, _v)| *pk).collect();
-    let sender_transactions: Vec<EncryptedBalance> = transfers
-        .iter()
-        .map(|(_, v)| {
-            new_ciphertext(
-                sender_pk,
-                Into::<u64>::into(*v),
-                blinding_for_transaction_value,
-            )
-        })
-        .collect();
-    let receiver_transactions: Vec<EncryptedBalance> = transfers
-        .iter()
-        .map(|(pk, v)| new_ciphertext(pk, Into::<u64>::into(*v), blinding_for_transaction_value))
-        .collect();
-    let sender_final_encrypted_balance = sender_transactions
-        .iter()
-        .fold(*original_balance, |acc, i| acc - *i);
-    let mut prover_transcript = Transcript::new(MERLIN_CONFIDENTIAL_TRANSACTION_LABEL);
-    let (proof, commitments) = if transfers.len() == 1 {
-        let (p, c) = ZetherProof::prove_multiple(
-            &BP_GENS,
-            &PC_GENS,
-            &mut prover_transcript,
-            &values_to_commit,
-            &blindings,
-            A::bit_size(),
-            sender_pk.as_point(),
-            receiver_pks
-                .first()
-                .expect("Checked nonempty earlier")
-                .as_point(),
-            &ciphertext_points_random_term_last(&sender_final_encrypted_balance),
-            &sender_transactions
-                .first()
-                .map(|t| ciphertext_points_random_term_last(t))
-                .expect("Checked nonempty earlier"),
-            &to_elgamal_ristretto_secret_key(sender_sk).get_scalar(),
-            blinding_for_transaction_value,
-        )
-        .map_err(TransactionError::BulletProofs)?;
-        (Proof::Zether(p), c)
-    } else {
-        let (p, c) = BatchZetherProof::prove_multiple(
-            &BP_GENS,
-            &PC_GENS,
-            &mut prover_transcript,
-            &values_to_commit,
-            &blindings,
-            A::bit_size(),
-            sender_pk.as_point(),
-            &receiver_pks.iter().map(|pk| pk.into_point()).collect(),
-            &ciphertext_points_random_term_last(&sender_final_encrypted_balance),
-            sender_transactions
-                .iter()
-                .map(|t| ciphertext_points_random_term_last(t))
-                .collect(),
-            &to_elgamal_ristretto_secret_key(sender_sk).get_scalar(),
-            &blinding_for_transaction_value,
-        )
-        .map_err(TransactionError::BulletProofs)?;
-        (Proof::BatchZether(p), c)
-    };
-
-    my_debug!(&proof, &commitments);
-    Ok(Transaction::new(
-        *sender_pk,
-        *original_balance,
-        sender_transactions
-            .into_iter()
-            .zip(receiver_transactions)
-            .collect(),
-        commitments,
-        proof,
-    ))
 }
 
 #[cfg(test)]
