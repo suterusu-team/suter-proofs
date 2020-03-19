@@ -26,10 +26,10 @@ num = "0.2.1"
 bincode = "1.2.1"
 schnorrkel = { git = "https://github.com/w3f/schnorrkel.git", rev = "c0f9e40", features = ["serde"] }
 itertools = "0.9.0"
+rand_chacha = "0.2.1"
 
 [dev-dependencies]
 bincode = "1.2.1"
-rand_chacha = "0.2.1"
 
 [features]
 default = ["std"]

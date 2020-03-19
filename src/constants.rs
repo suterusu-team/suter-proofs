@@ -1,9 +1,11 @@
 use bulletproofs::{BulletproofGens, PedersenGens};
 use curve25519_dalek::constants::RISTRETTO_BASEPOINT_POINT;
 use curve25519_dalek::ristretto::RistrettoPoint;
+use rand_chacha::ChaCha20Rng;
+use rand_core::SeedableRng;
 use sha2::Sha512;
 
-use crate::PublicKey;
+use crate::{PublicKey, SecretKey};
 
 pub(crate) static MERLIN_CONFIDENTIAL_TRANSACTION_LABEL: &[u8] =
     b"suter_confidential_transaction_proof";
@@ -22,4 +24,10 @@ lazy_static! {
     pub static ref RANDOM_PK_TO_PAD_TRANSACTIONS: PublicKey = PublicKey::from_point(
         RistrettoPoint::hash_from_bytes::<Sha512>(RANDOM_RISTRETTO_POINT_HASH_INPUT)
     );
+    pub static ref FEE_KEYPAIR: (SecretKey, PublicKey) = {
+        let mut csprng: ChaCha20Rng = SeedableRng::seed_from_u64(0);
+        let sk = SecretKey::generate_with(&mut csprng);
+        let pk = sk.to_public();
+        (sk, pk)
+    };
 }

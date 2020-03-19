@@ -5,6 +5,7 @@ use curve25519_dalek::scalar::Scalar;
 use curve25519_dalek::traits::Identity;
 use itertools::Itertools;
 use num::{CheckedAdd, CheckedSub, Integer, Zero};
+use serde::{de::DeserializeOwned, Serialize};
 
 use crate::constants::BASE_POINT;
 use crate::crypto::{to_elgamal_ristretto_public_key, to_elgamal_ristretto_secret_key};
@@ -13,8 +14,16 @@ use crate::{EncryptedBalance, PublicKey, SecretKey};
 /// Represents some amount of type {u8,u16,u32,u64} which can be encrypted and decrypted.
 /// This trait is essentially a wrapper to target types.
 /// Only {u8,u16,u32,u64} have implemented Amount, and only they can implement Amount.
-pub trait Amount: Sized + private::Sealed {
-    type Target: Copy + std::fmt::Debug + Integer + Zero + CheckedAdd + CheckedSub + Into<u64>;
+pub trait Amount: Sized + private::Sealed + DeserializeOwned + Serialize {
+    type Target: Copy
+        + std::fmt::Debug
+        + Integer
+        + Zero
+        + CheckedAdd
+        + CheckedSub
+        + Into<u64>
+        + DeserializeOwned
+        + Serialize;
 
     /// Create a new Amount from the target type.
     fn new(target: <Self as Amount>::Target) -> Self;
