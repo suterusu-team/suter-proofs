@@ -37,6 +37,7 @@ fn main() {
     let transaction = Transaction::<u64>::create_transaction(
         &sender_initial_encrypted_balance,
         &transfers,
+        None,
         &sender_pk,
         &sender_sk,
     )
