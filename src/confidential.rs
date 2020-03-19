@@ -120,7 +120,7 @@ impl<A: Amount> Transaction<A> {
     }
 
     fn receiver_transactions_for_verification(&self) -> Vec<EncryptedBalance> {
-        match self.receiver_fee_transaction(&FEE_KEYPAIR.1) {
+        match self.receiver_fee_transaction(&pk_for_fee()) {
             Some(fee_transaction) => iter::once(fee_transaction)
                 .chain(self.receiver_transactions())
                 .collect(),
@@ -213,9 +213,8 @@ struct ProofBuilder<A: Amount> {
     fee: Option<<A as Amount>::Target>,
 }
 
-fn identity_pk() -> PublicKey {
-    use curve25519_dalek::traits::Identity;
-    PublicKey::from_point(Identity::identity())
+fn pk_for_fee() -> PublicKey {
+    FEE_KEYPAIR.1
 }
 
 impl<A: Amount> ProofBuilder<A> {
@@ -244,7 +243,7 @@ impl<A: Amount> ProofBuilder<A> {
         if self.fee.is_some() {
             return;
         }
-        self.transfers.insert(0, (identity_pk(), fee));
+        self.transfers.insert(0, (pk_for_fee(), fee));
         self.fee = Some(fee);
     }
 
@@ -265,16 +264,15 @@ impl<A: Amount> ProofBuilder<A> {
     }
 
     fn generate_transaction_random_parameters<T: RngCore + CryptoRng>(&mut self, rng: &mut T) {
-        my_debug!(&self.blindings);
-        self.blindings = (0..=self.transfers.len() + 1)
+        // Generate enough blindings for the fee, transaction value,
+        // sender final balance and transferred values and padded transfers
+        self.blindings = (0..=(self.transfers.len() + 2).next_power_of_two())
             .map(|_| Scalar::random(rng))
             .collect();
-        my_debug!(&self.blindings);
     }
 
     fn get_blindings(&self) -> (&Scalar, &[Scalar]) {
         let (left, right) = self.blindings.split_at(1);
-        my_debug!(left, right);
         (left.first().unwrap(), right)
     }
 
@@ -285,11 +283,13 @@ impl<A: Amount> ProofBuilder<A> {
         self.pad_transfers();
         self.generate_transaction_random_parameters(rng);
 
-        let (blinding_for_transaction_value, blindings) = self.get_blindings();
-        // Must have transfers.
-        assert!(!self.transfers.is_empty());
-        // Blindings includes blindings for transfer value, and blinding for final value.
-        assert_eq!(self.transfers.len() + 1, blindings.len());
+        if self.transfers.is_empty() {
+            return Err(TransactionError::EmptyTransfers);
+        }
+
+        if self.transfers.iter().any(|(pk, _)| *pk == self.public_key) {
+            return Err(TransactionError::SelfTransfer);
+        }
 
         if self.transfers.len() > MAX_NUM_OF_TRANSFERS {
             return Err(TransactionError::TooManyTransfers {
@@ -298,12 +298,13 @@ impl<A: Amount> ProofBuilder<A> {
             });
         }
 
-        if self.transfers.iter().any(|(pk, _)| *pk == self.public_key) {
-            return Err(TransactionError::SelfTransfer);
-        }
+        let (blinding_for_transaction_value, blindings) = self.get_blindings();
+        // Blindings includes blindings for transfer value, and blinding for final value.
+        assert!(self.transfers.len() + 1 < blindings.len());
+        let mut blindings = blindings.to_vec();
+        blindings.truncate(self.transfers.len() + 1);
 
         let mut values_to_commit: Vec<u64> = self.get_transfer_values();
-
         let sender_initial_balance: A::Target =
             A::try_decrypt_from(&self.secret_key, &self.original_balance)
                 .ok_or(TransactionError::Decryption)?;
@@ -312,12 +313,12 @@ impl<A: Amount> ProofBuilder<A> {
             .iter()
             .try_fold(sender_initial_balance, |acc, &(_pk, v)| acc.checked_sub(&v))
             .ok_or(TransactionError::Overflow)?;
+        values_to_commit.push(sender_final_balance.into());
         my_debug!(
             sender_initial_balance,
             sender_final_balance,
             &values_to_commit
         );
-        values_to_commit.push(sender_final_balance.into());
         let receiver_pks: Vec<PublicKey> = self.transfers.iter().map(|(pk, _v)| *pk).collect();
         let sender_transactions: Vec<EncryptedBalance> = self
             .transfers
@@ -340,6 +341,7 @@ impl<A: Amount> ProofBuilder<A> {
         let sender_final_encrypted_balance = sender_transactions
             .iter()
             .fold(self.original_balance, |acc, i| acc - *i);
+
         let mut prover_transcript = Transcript::new(MERLIN_CONFIDENTIAL_TRANSACTION_LABEL);
         let (proof, commitments) = if self.transfers.len() == 1 {
             let (p, c) = ZetherProof::prove_multiple(
@@ -387,17 +389,31 @@ impl<A: Amount> ProofBuilder<A> {
         };
 
         my_debug!(&proof, &commitments);
-        Ok(Transaction::new(
-            self.public_key,
-            self.original_balance,
-            sender_transactions
-                .into_iter()
-                .zip(receiver_transactions)
-                .collect(),
-            None,
-            commitments,
-            proof,
-        ))
+        match self.fee {
+            Some(fee) => Ok(Transaction::new(
+                self.public_key,
+                self.original_balance,
+                sender_transactions
+                    .into_iter()
+                    .zip(receiver_transactions)
+                    .skip(1)
+                    .collect(),
+                Some((fee, *blinding_for_transaction_value)),
+                commitments,
+                proof,
+            )),
+            None => Ok(Transaction::new(
+                self.public_key,
+                self.original_balance,
+                sender_transactions
+                    .into_iter()
+                    .zip(receiver_transactions)
+                    .collect(),
+                None,
+                commitments,
+                proof,
+            )),
+        }
     }
 }
 
@@ -411,12 +427,14 @@ pub trait ConfidentialTransaction {
     fn create_transaction(
         original_balance: &EncryptedBalance,
         transfers: &[(PublicKey, <Self::Amount as Amount>::Target)],
+        transfer_fee: Option<<Self::Amount as Amount>::Target>,
         sender_pk: &PublicKey,
         sender_sk: &SecretKey,
     ) -> Result<Transaction<Self::Amount>, TransactionError> {
         Self::create_transaction_with_rng(
             original_balance,
             transfers,
+            transfer_fee,
             sender_pk,
             sender_sk,
             &mut thread_rng(),
@@ -427,6 +445,7 @@ pub trait ConfidentialTransaction {
     fn create_transaction_with_rng<T: RngCore + CryptoRng>(
         original_balance: &EncryptedBalance,
         transfers: &[(PublicKey, <Self::Amount as Amount>::Target)],
+        transfer_fee: Option<<Self::Amount as Amount>::Target>,
         sender_pk: &PublicKey,
         sender_sk: &SecretKey,
         rng: &mut T,
@@ -442,6 +461,7 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
     fn create_transaction_with_rng<T: RngCore + CryptoRng>(
         original_balance: &EncryptedBalance,
         transfers: &[(PublicKey, <Self::Amount as Amount>::Target)],
+        transfer_fee: Option<<Self::Amount as Amount>::Target>,
         sender_pk: &PublicKey,
         sender_sk: &SecretKey,
         rng: &mut T,
@@ -451,7 +471,7 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
             sender_sk.clone(),
             original_balance.clone(),
             transfers.iter().map(Clone::clone).collect(),
-            None,
+            transfer_fee,
         );
         builder.create_proof_from_rng(rng)
     }
@@ -757,6 +777,7 @@ mod tests {
                 Transaction::<T>::create_transaction_with_rng(
                     &sender_initial_encrypted_balance,
                     &[(receiver_pk, transaction_value.inner())],
+                    None,
                     &sender_pk,
                     &sender_sk,
                     &mut csprng,
@@ -850,6 +871,7 @@ mod tests {
                 Transaction::<T>::create_transaction_with_rng(
                     &sender_initial_encrypted_balance,
                     &transfers,
+                    None,
                     &sender_pk,
                     &sender_sk,
                     &mut csprng,
@@ -939,6 +961,7 @@ mod tests {
         let transaction = Transaction::<u32>::create_transaction(
             &sender_initial_encrypted_balance,
             &[(receiver_pk, transaction_value)],
+            None,
             &sender_pk,
             &sender_sk,
         )
@@ -1014,6 +1037,7 @@ mod tests {
                 let transaction = Transaction::<T>::create_transaction_with_rng(
                     &sender_initial_encrypted_balance,
                     &transfers[..],
+                    None,
                     &sender_pk,
                     &sender_sk,
                     &mut csprng,
