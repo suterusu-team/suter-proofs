@@ -136,8 +136,21 @@ impl<A: Amount> Transaction<A> {
             .collect()
     }
 
-    fn receiver_pks_points(&self) -> Vec<RistrettoPoint> {
-        self.receiver_pks().iter().map(|x| *x.as_point()).collect()
+    /// Get the public keys of receivers
+    pub fn receiver_pks_for_verification(&self) -> Vec<PublicKey> {
+        match self.transfer_fee {
+            Some(_) => iter::once(pk_for_fee())
+                .chain(self.receiver_pks())
+                .collect(),
+            None => self.receiver_pks(),
+        }
+    }
+
+    fn receiver_pks_for_verification_points(&self) -> Vec<RistrettoPoint> {
+        self.receiver_pks_for_verification()
+            .iter()
+            .map(|x| *x.as_point())
+            .collect()
     }
 
     /// Get the final encrypted balance of sender after transaction is applied
@@ -204,6 +217,11 @@ impl<A: Amount> Transaction<A> {
     }
 }
 
+fn pk_for_fee() -> PublicKey {
+    FEE_KEYPAIR.1
+}
+
+#[derive(Clone, Debug)]
 struct ProofBuilder<A: Amount> {
     public_key: PublicKey,
     secret_key: SecretKey,
@@ -211,10 +229,6 @@ struct ProofBuilder<A: Amount> {
     transfers: Vec<(PublicKey, <A as Amount>::Target)>,
     blindings: Vec<Scalar>,
     fee: Option<<A as Amount>::Target>,
-}
-
-fn pk_for_fee() -> PublicKey {
-    FEE_KEYPAIR.1
 }
 
 impl<A: Amount> ProofBuilder<A> {
@@ -233,9 +247,11 @@ impl<A: Amount> ProofBuilder<A> {
             blindings: vec![],
             fee: None,
         };
+        my_debug!(&builder);
         if let Some(fee) = fee {
             builder.add_fee(fee);
         }
+        my_debug!(&builder);
         builder
     }
 
@@ -505,7 +521,7 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
                         A::bit_size(),
                         &self.sender_pk_point(),
                         &self
-                            .receiver_pks_points()
+                            .receiver_pks_for_verification_points()
                             .first()
                             .expect("Checked nonempty earlier"),
                         &ciphertext_points_random_term_last(
@@ -525,7 +541,7 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
                     .map_err(TransactionError::BulletProofs)?
             }
             Proof::BatchZether(proof) => {
-                // TODO: verify the number of transfers not too large
+                // TODO: verify the commitment for transfer fee is correct
                 proof
                     .verify_multiple(
                         &BP_GENS,
@@ -534,7 +550,7 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
                         &self.commitments,
                         A::bit_size(),
                         &self.sender_pk_point(),
-                        &self.receiver_pks_points(),
+                        &self.receiver_pks_for_verification_points(),
                         &ciphertext_points_random_term_last(
                             &self.get_sender_final_encrypted_balance(),
                         ),
@@ -739,6 +755,89 @@ mod tests {
     {
         setup_from_seed_and_num_of_transfers(seed, 1)
             .map(|(a, b, c, d)| (a, b, c, d.into_iter().next().unwrap()))
+    }
+
+    fn create_fee_only_transaction<T>(seed: u64) -> Option<Transaction<T>>
+    where
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        setup_from_seed::<T>(seed).map(
+            |(
+                mut csprng,
+                (sender_sk, sender_pk),
+                (
+                    _sender_initial_balance,
+                    _sender_final_balance,
+                    _sender_initial_balance_blinding,
+                    sender_initial_encrypted_balance,
+                ),
+                (
+                    _receiver_sk,
+                    _receiver_pk,
+                    _receiver_initial_balance,
+                    _receiver_initial_balance_blinding,
+                    _receiver_initial_encrypted_balance,
+                    transaction_value,
+                    _transaction_blinding,
+                    _sender_transaction,
+                    _receiver_transaction,
+                ),
+            )| {
+                Transaction::<T>::create_transaction_with_rng(
+                    &sender_initial_encrypted_balance,
+                    &[],
+                    Some(transaction_value.inner()),
+                    &sender_pk,
+                    &sender_sk,
+                    &mut csprng,
+                )
+                .expect("Should be able to create transaction")
+            },
+        )
+    }
+
+    #[quickcheck]
+    fn create_and_verify_fee_only_transaction_u16(seed: u64) -> TestResult {
+        create_and_verify_fee_only_transaction::<u16>(seed)
+    }
+
+    #[quickcheck]
+    fn create_and_verify_fee_only_transaction_u32(seed: u64) -> TestResult {
+        create_and_verify_fee_only_transaction::<u32>(seed)
+    }
+
+    #[quickcheck]
+    fn create_and_verify_fee_only_transaction_u64(seed: u64) -> TestResult {
+        create_and_verify_fee_only_transaction::<u64>(seed)
+    }
+
+    fn create_and_verify_fee_only_transaction<T>(seed: u64) -> TestResult
+    where
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        match create_fee_only_transaction::<T>(seed) {
+            None => {
+                return TestResult::discard();
+            }
+            Some(transaction) => {
+                assert!(transaction.verify_transaction().is_ok());
+                TestResult::passed()
+            }
+        }
     }
 
     fn create_one_to_one_transaction<T>(seed: u64) -> Option<Transaction<T>>

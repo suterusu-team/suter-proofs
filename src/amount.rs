@@ -14,7 +14,7 @@ use crate::{EncryptedBalance, PublicKey, SecretKey};
 /// Represents some amount of type {u8,u16,u32,u64} which can be encrypted and decrypted.
 /// This trait is essentially a wrapper to target types.
 /// Only {u8,u16,u32,u64} have implemented Amount, and only they can implement Amount.
-pub trait Amount: Sized + private::Sealed + DeserializeOwned + Serialize {
+pub trait Amount: Sized + private::Sealed + DeserializeOwned + Serialize + std::fmt::Debug {
     type Target: Copy
         + std::fmt::Debug
         + Integer
