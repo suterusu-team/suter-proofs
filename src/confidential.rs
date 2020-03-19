@@ -208,10 +208,16 @@ impl<A: Amount> Transaction<A> {
         }
         let transaction: Self =
             bincode::deserialize(&slice[1..]).map_err(TransactionSerdeError::Underlying)?;
-        if transaction.transfers.is_empty()
-            || transaction.commitments.len() != transaction.transfers.len() + 1
-        {
-            return Err(TransactionSerdeError::Malformed);
+        if transaction.transfer_fee.is_none() {
+            if transaction.transfers.is_empty()
+                || transaction.commitments.len() != transaction.transfers.len() + 1
+            {
+                return Err(TransactionSerdeError::Malformed);
+            }
+        } else {
+            if transaction.commitments.len() != transaction.transfers.len() + 2 {
+                return Err(TransactionSerdeError::Malformed);
+            }
         }
         Ok(transaction)
     }
@@ -617,9 +623,10 @@ mod tests {
     }
 
     // Deterministically generate transacation parameters
-    fn setup_from_seed_and_num_of_transfers<T>(
+    fn do_setup_from_seed_and_num_of_transfers<T>(
         seed: u64,
         num_of_transfers: u8,
+        include_fee: bool,
     ) -> Option<(
         ChaCha20Rng,
         // sender_sk, sender_pk
@@ -638,6 +645,7 @@ mod tests {
             EncryptedBalance,
             EncryptedBalance,
         )>,
+        Option<T>,
     )>
     where
         T: Copy
@@ -662,6 +670,7 @@ mod tests {
         // TODO: u16 takes reasonable time to finish.
         // let sender_final_balance = Rng::gen::<T>(&mut csprng);
         let sender_final_balance = T::from(Rng::gen::<u16>(&mut csprng));
+        let transfer_fee = T::from(Rng::gen::<u16>(&mut csprng));
         let info: Vec<_> = (1..=num_of_transfers)
             .map(|_i| {
                 let receiver_sk = SecretKey::generate_with(&mut csprng);
@@ -700,9 +709,15 @@ mod tests {
             })
             .collect();
         let transaction_values = info.iter().map(|x| x.5).collect::<Vec<_>>();
-        let sender_initial_balance = transaction_values
-            .iter()
-            .try_fold(sender_final_balance, |acc, v| acc.checked_add(&v))?;
+        let sender_initial_balance = if include_fee {
+            iter::once(transfer_fee)
+                .chain(transaction_values)
+                .try_fold(sender_final_balance, |acc, v| acc.checked_add(&v))?
+        } else {
+            transaction_values
+                .iter()
+                .try_fold(sender_final_balance, |acc, v| acc.checked_add(&v))?
+        };
         let sender_initial_balance_blinding = Scalar::random(&mut csprng);
         let sender_initial_encrypted_balance = new_ciphertext(
             &sender_pk,
@@ -719,7 +734,86 @@ mod tests {
                 sender_initial_encrypted_balance,
             ),
             info,
+            if include_fee {
+                Some(transfer_fee)
+            } else {
+                None
+            },
         ));
+    }
+
+    // Deterministically generate transacation parameters
+    fn setup_from_seed_and_num_of_transfers<T>(
+        seed: u64,
+        num_of_transfers: u8,
+    ) -> Option<(
+        ChaCha20Rng,
+        // sender_sk, sender_pk
+        (SecretKey, PublicKey),
+        // sender_initial_balance, sender_final_balance, sender_initial_balance_blinding, sender_initial_encrypted_balance
+        (T, T, Scalar, EncryptedBalance),
+        // receiver_sk, receiver_pk, receiver_initial_balance, receiver_initial_balance_blinding, receiver_initial_encrypted_balance, transaction_value, transaction_blinding, sender_transaction, receiver_transaction
+        Vec<(
+            SecretKey,
+            PublicKey,
+            T,
+            Scalar,
+            EncryptedBalance,
+            T,
+            Scalar,
+            EncryptedBalance,
+            EncryptedBalance,
+        )>,
+    )>
+    where
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        do_setup_from_seed_and_num_of_transfers(seed, num_of_transfers, false)
+            .map(|(a, b, c, d, _)| (a, b, c, d))
+    }
+
+    fn setup_from_seed_and_num_of_transfers_with_fee<T>(
+        seed: u64,
+        num_of_transfers: u8,
+    ) -> Option<(
+        ChaCha20Rng,
+        // sender_sk, sender_pk
+        (SecretKey, PublicKey),
+        // sender_initial_balance, sender_final_balance, sender_initial_balance_blinding, sender_initial_encrypted_balance
+        (T, T, Scalar, EncryptedBalance),
+        // receiver_sk, receiver_pk, receiver_initial_balance, receiver_initial_balance_blinding, receiver_initial_encrypted_balance, transaction_value, transaction_blinding, sender_transaction, receiver_transaction
+        Vec<(
+            SecretKey,
+            PublicKey,
+            T,
+            Scalar,
+            EncryptedBalance,
+            T,
+            Scalar,
+            EncryptedBalance,
+            EncryptedBalance,
+        )>,
+        T,
+    )>
+    where
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        do_setup_from_seed_and_num_of_transfers(seed, num_of_transfers, true)
+            .map(|(a, b, c, d, e)| (a, b, c, d, e.unwrap()))
     }
 
     fn setup_from_seed<T>(
@@ -755,6 +849,42 @@ mod tests {
     {
         setup_from_seed_and_num_of_transfers(seed, 1)
             .map(|(a, b, c, d)| (a, b, c, d.into_iter().next().unwrap()))
+    }
+
+    fn setup_from_seed_with_fee<T>(
+        seed: u64,
+    ) -> Option<(
+        ChaCha20Rng,
+        // sender_sk, sender_pk
+        (SecretKey, PublicKey),
+        // sender_initial_balance, sender_final_balance, sender_initial_balance_blinding, sender_initial_encrypted_balance
+        (T, T, Scalar, EncryptedBalance),
+        // receiver_sk, receiver_pk, receiver_initial_balance, receiver_initial_balance_blinding, receiver_initial_encrypted_balance, transaction_value, transaction_blinding, sender_transaction, receiver_transaction
+        (
+            SecretKey,
+            PublicKey,
+            T,
+            Scalar,
+            EncryptedBalance,
+            T,
+            Scalar,
+            EncryptedBalance,
+            EncryptedBalance,
+        ),
+        T,
+    )>
+    where
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        setup_from_seed_and_num_of_transfers_with_fee(seed, 1)
+            .map(|(a, b, c, d, e)| (a, b, c, d.into_iter().next().unwrap(), e))
     }
 
     fn create_fee_only_transaction<T>(seed: u64) -> Option<Transaction<T>>
@@ -942,6 +1072,109 @@ mod tests {
         create_and_verify_one_to_one_transaction::<u64>(seed)
     }
 
+    fn create_one_to_one_transaction_with_fee<T>(seed: u64) -> Option<Transaction<T>>
+    where
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        setup_from_seed_with_fee::<T>(seed).map(
+            |(
+                mut csprng,
+                (sender_sk, sender_pk),
+                (
+                    _sender_initial_balance,
+                    _sender_final_balance,
+                    _sender_initial_balance_blinding,
+                    sender_initial_encrypted_balance,
+                ),
+                (
+                    _receiver_sk,
+                    receiver_pk,
+                    _receiver_initial_balance,
+                    _receiver_initial_balance_blinding,
+                    _receiver_initial_encrypted_balance,
+                    transaction_value,
+                    _transaction_blinding,
+                    _sender_transaction,
+                    _receiver_transaction,
+                ),
+                transfer_fee,
+            )| {
+                Transaction::<T>::create_transaction_with_rng(
+                    &sender_initial_encrypted_balance,
+                    &[(receiver_pk, transaction_value.inner())],
+                    Some(transfer_fee.inner()),
+                    &sender_pk,
+                    &sender_sk,
+                    &mut csprng,
+                )
+                .expect("Should be able to create transaction")
+            },
+        )
+    }
+
+    #[quickcheck]
+    fn serde_one_to_one_transaction_with_fee_u32(seed: u64) -> TestResult {
+        match create_one_to_one_transaction_with_fee::<u32>(seed) {
+            None => {
+                return TestResult::discard();
+            }
+            Some(transaction) => {
+                assert_eq!(
+                    transaction.to_bytes().unwrap(),
+                    Transaction::<u32>::from_bytes(&transaction.to_bytes().unwrap())
+                        .unwrap()
+                        .to_bytes()
+                        .unwrap(),
+                );
+                TestResult::passed()
+            }
+        }
+    }
+
+    fn create_and_verify_one_to_one_transaction_with_fee<T>(seed: u64) -> TestResult
+    where
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        match create_one_to_one_transaction_with_fee::<T>(seed) {
+            None => {
+                return TestResult::discard();
+            }
+            Some(transaction) => {
+                assert!(transaction.verify_transaction().is_ok());
+                TestResult::passed()
+            }
+        }
+    }
+
+    #[quickcheck]
+    fn create_and_verify_one_to_one_transaction_with_fee_u16(seed: u64) -> TestResult {
+        create_and_verify_one_to_one_transaction_with_fee::<u16>(seed)
+    }
+
+    #[quickcheck]
+    fn create_and_verify_one_to_one_transaction_with_fee_u32(seed: u64) -> TestResult {
+        create_and_verify_one_to_one_transaction_with_fee::<u32>(seed)
+    }
+
+    #[quickcheck]
+    fn create_and_verify_one_to_one_transaction_with_fee_u64(seed: u64) -> TestResult {
+        create_and_verify_one_to_one_transaction_with_fee::<u64>(seed)
+    }
+
     fn create_one_to_n_transaction<T>(seed: u64, n: u8) -> Option<Transaction<T>>
     where
         T: Copy
@@ -1033,6 +1266,99 @@ mod tests {
     #[quickcheck]
     fn create_and_verify_one_to_n_transaction_u64(seed: u64, n: u8) -> TestResult {
         create_and_verify_one_to_n_transaction::<u64>(seed, n)
+    }
+
+    fn create_one_to_n_transaction_with_fee<T>(seed: u64, n: u8) -> Option<Transaction<T>>
+    where
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        setup_from_seed_and_num_of_transfers::<T>(seed, n).map(
+            |(
+                mut csprng,
+                (sender_sk, sender_pk),
+                (
+                    _sender_initial_balance,
+                    _sender_final_balance,
+                    _sender_initial_balance_blinding,
+                    sender_initial_encrypted_balance,
+                ),
+                info,
+            )| {
+                let transfers: Vec<(PublicKey, <T as Amount>::Target)> =
+                    info.iter().map(|x| (x.1, x.5.inner())).collect();
+                Transaction::<T>::create_transaction_with_rng(
+                    &sender_initial_encrypted_balance,
+                    &transfers,
+                    None,
+                    &sender_pk,
+                    &sender_sk,
+                    &mut csprng,
+                )
+                .expect("Should be able to create transaction")
+            },
+        )
+    }
+
+    #[quickcheck]
+    fn serde_one_to_n_transaction_with_fee_u32(seed: u64, n: u8) -> TestResult {
+        match create_one_to_n_transaction_with_fee::<u32>(seed, n) {
+            None => {
+                return TestResult::discard();
+            }
+            Some(transaction) => {
+                let bytes = transaction.to_bytes().unwrap();
+                let new_transaction = Transaction::<u32>::from_bytes(&bytes).unwrap();
+                assert_eq!(
+                    transaction.to_bytes().unwrap(),
+                    new_transaction.to_bytes().unwrap(),
+                );
+                TestResult::passed()
+            }
+        }
+    }
+
+    fn create_and_verify_one_to_n_transaction_with_fee<T>(seed: u64, n: u8) -> TestResult
+    where
+        T: Copy
+            + std::fmt::Debug
+            + From<u16>
+            + Amount
+            + num::Integer
+            + num::CheckedAdd
+            + std::iter::Sum,
+        Standard: Distribution<T>,
+    {
+        match create_one_to_n_transaction_with_fee::<T>(seed, n) {
+            None => {
+                return TestResult::discard();
+            }
+            Some(transaction) => {
+                assert!(transaction.verify_transaction().is_ok());
+                TestResult::passed()
+            }
+        }
+    }
+
+    #[quickcheck]
+    fn create_and_verify_one_to_n_transaction_with_fee_u16(seed: u64, n: u8) -> TestResult {
+        create_and_verify_one_to_n_transaction_with_fee::<u16>(seed, n)
+    }
+
+    #[quickcheck]
+    fn create_and_verify_one_to_n_transaction_with_fee_u32(seed: u64, n: u8) -> TestResult {
+        create_and_verify_one_to_n_transaction_with_fee::<u32>(seed, n)
+    }
+
+    #[quickcheck]
+    fn create_and_verify_one_to_n_transaction_with_fee_u64(seed: u64, n: u8) -> TestResult {
+        create_and_verify_one_to_n_transaction_with_fee::<u64>(seed, n)
     }
 
     #[quickcheck]
