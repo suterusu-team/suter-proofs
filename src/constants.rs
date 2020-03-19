@@ -25,7 +25,7 @@ lazy_static! {
         RistrettoPoint::hash_from_bytes::<Sha512>(RANDOM_RISTRETTO_POINT_HASH_INPUT)
     );
     pub(crate) static ref FEE_KEYPAIR: (SecretKey, PublicKey) = {
-        let mut csprng: ChaCha20Rng = SeedableRng::seed_from_u64(0);
+        let mut csprng: ChaCha20Rng = SeedableRng::seed_from_u64(32938408097);
         let sk = SecretKey::generate_with(&mut csprng);
         let pk = sk.to_public();
         (sk, pk)
