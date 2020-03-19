@@ -1,4 +1,5 @@
-use std::marker::PhantomData;
+use crate::constants::FEE_KEYPAIR;
+use std::{iter, marker::PhantomData};
 
 use bulletproofs::{BatchZetherProof, ZetherProof};
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
@@ -14,10 +15,7 @@ use crate::constants::{
     BP_GENS, MAX_NUM_OF_TRANSFERS, MERLIN_CONFIDENTIAL_TRANSACTION_LABEL, PC_GENS,
     RANDOM_PK_TO_PAD_TRANSACTIONS,
 };
-use crate::crypto::{
-    from_elgamal_ristretto_public_key, to_elgamal_ristretto_public_key,
-    to_elgamal_ristretto_secret_key,
-};
+use crate::crypto::{from_elgamal_ristretto_public_key, to_elgamal_ristretto_secret_key};
 use crate::utils::{ciphertext_points_random_term_last, new_ciphertext};
 use crate::{
     Amount, EncryptedBalance, PublicKey, SecretKey, TransactionError, TransactionSerdeError,
@@ -32,10 +30,15 @@ pub enum Proof {
 
 /// One to n confidential transaction.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(bound(
+    serialize = "A::Target: Serialize",
+    deserialize = "A::Target: Deserialize<'de>",
+))]
 pub struct Transaction<A: Amount> {
     sender: PublicKey,
     original_balance: EncryptedBalance,
     transfers: Vec<(EncryptedBalance, EncryptedBalance)>,
+    transfer_fee: Option<(<A as Amount>::Target, Scalar)>,
     commitments: Vec<CompressedRistretto>,
     proof: Proof,
     _phantom: PhantomData<A>,
@@ -46,6 +49,7 @@ impl<A: Amount> Transaction<A> {
         sender: PublicKey,
         original_balance: EncryptedBalance,
         transfers: Vec<(EncryptedBalance, EncryptedBalance)>,
+        transfer_fee: Option<(<A as Amount>::Target, Scalar)>,
         commitments: Vec<CompressedRistretto>,
         proof: Proof,
     ) -> Self {
@@ -53,34 +57,45 @@ impl<A: Amount> Transaction<A> {
             sender,
             original_balance,
             transfers,
+            transfer_fee,
             commitments,
             proof,
             _phantom: PhantomData,
         }
     }
 
-    /// Number of transfers contained in this transaction
-    pub fn num_of_transfers(&self) -> usize {
-        self.transfers.len()
+    // Number of transfers contained in this transaction
+    fn num_of_transfers_for_verification(&self) -> usize {
+        if self.transfer_fee.is_some() {
+            self.transfers.len() + 1
+        } else {
+            self.transfers.len()
+        }
     }
 
-    /// Number of effective transfers contained in this transaction
-    pub fn num_of_effective_transfers(&self) -> usize {
-        self.sender_transactions().len()
+    // Transactions for sender to apply
+    fn sender_transactions(&self) -> Vec<EncryptedBalance> {
+        self.transfers.iter().map(|(s, _r)| *s).collect()
     }
 
-    /// Transactions for sender to apply
-    pub fn sender_transactions(&self) -> Vec<&EncryptedBalance> {
-        self.transfers.iter().map(|(s, _r)| s).collect()
+    fn sender_fee_transaction(&self) -> Option<EncryptedBalance> {
+        self.transfer_fee
+            .map(|(fee, blinding_for_transaction_value)| {
+                new_ciphertext(
+                    &self.sender_pk(),
+                    fee.into(),
+                    &blinding_for_transaction_value,
+                )
+            })
     }
 
-    /// Effective transactions (transaction whose receiver is not sender itself) for sender to apply
-    pub fn effective_sender_transactions(&self) -> Vec<&EncryptedBalance> {
-        self.transfers
-            .iter()
-            .filter(|(_s, r)| r.pk != to_elgamal_ristretto_public_key(&self.sender_pk()))
-            .map(|(s, _r)| s)
-            .collect()
+    fn sender_transactions_for_verification(&self) -> Vec<EncryptedBalance> {
+        match self.sender_fee_transaction() {
+            Some(fee_transaction) => iter::once(fee_transaction)
+                .chain(self.sender_transactions())
+                .collect(),
+            None => self.sender_transactions(),
+        }
     }
 
     /// Get the public key of sender
@@ -92,18 +107,25 @@ impl<A: Amount> Transaction<A> {
         self.original_balance.pk.get_point()
     }
 
-    /// Transactions for receiver to apply
-    pub fn receiver_transactions(&self) -> Vec<&EncryptedBalance> {
-        self.transfers.iter().map(|(_s, r)| r).collect()
+    // Transactions for receiver to apply
+    fn receiver_transactions(&self) -> Vec<EncryptedBalance> {
+        self.transfers.iter().map(|(_s, r)| *r).collect()
     }
 
-    /// Effective transactions (transaction whose receiver is not sender itself) for receivers to apply
-    pub fn effective_receiver_transactions(&self) -> Vec<&EncryptedBalance> {
-        self.transfers
-            .iter()
-            .filter(|(_s, r)| r.pk != to_elgamal_ristretto_public_key(&self.sender_pk()))
-            .map(|(_s, r)| r)
-            .collect()
+    fn receiver_fee_transaction(&self, receiver_pk: &PublicKey) -> Option<EncryptedBalance> {
+        self.transfer_fee
+            .map(|(fee, blinding_for_transaction_value)| {
+                new_ciphertext(&receiver_pk, fee.into(), &blinding_for_transaction_value)
+            })
+    }
+
+    fn receiver_transactions_for_verification(&self) -> Vec<EncryptedBalance> {
+        match self.receiver_fee_transaction(&FEE_KEYPAIR.1) {
+            Some(fee_transaction) => iter::once(fee_transaction)
+                .chain(self.receiver_transactions())
+                .collect(),
+            None => self.receiver_transactions(),
+        }
     }
 
     /// Get the public keys of receivers
@@ -115,15 +137,12 @@ impl<A: Amount> Transaction<A> {
     }
 
     fn receiver_pks_points(&self) -> Vec<RistrettoPoint> {
-        self.transfers
-            .iter()
-            .map(|(_s, r)| r.pk.get_point())
-            .collect()
+        self.receiver_pks().iter().map(|x| *x.as_point()).collect()
     }
 
     /// Get the final encrypted balance of sender after transaction is applied
     pub fn get_sender_final_encrypted_balance(&self) -> EncryptedBalance {
-        self.effective_sender_transactions()
+        self.sender_transactions_for_verification()
             .iter()
             .fold(self.original_balance, |acc, i| acc - *i)
     }
@@ -191,6 +210,12 @@ struct ProofBuilder<A: Amount> {
     original_balance: EncryptedBalance,
     transfers: Vec<(PublicKey, <A as Amount>::Target)>,
     blindings: Vec<Scalar>,
+    fee: Option<<A as Amount>::Target>,
+}
+
+fn identity_pk() -> PublicKey {
+    use curve25519_dalek::traits::Identity;
+    PublicKey::from_point(Identity::identity())
 }
 
 impl<A: Amount> ProofBuilder<A> {
@@ -199,14 +224,28 @@ impl<A: Amount> ProofBuilder<A> {
         secret_key: SecretKey,
         original_balance: EncryptedBalance,
         transfers: Vec<(PublicKey, <A as Amount>::Target)>,
+        fee: Option<<A as Amount>::Target>,
     ) -> Self {
-        Self {
+        let mut builder = Self {
             public_key,
             secret_key,
             original_balance,
             transfers,
             blindings: vec![],
+            fee: None,
+        };
+        if let Some(fee) = fee {
+            builder.add_fee(fee);
         }
+        builder
+    }
+
+    fn add_fee(&mut self, fee: <A as Amount>::Target) {
+        if self.fee.is_some() {
+            return;
+        }
+        self.transfers.insert(0, (identity_pk(), fee));
+        self.fee = Some(fee);
     }
 
     // Padding transfers with transferred value 0, so that we can use aggregate zether proofs.
@@ -217,7 +256,7 @@ impl<A: Amount> ProofBuilder<A> {
         let n = self.transfers.len();
         self.transfers.extend(
             std::iter::repeat((*RANDOM_PK_TO_PAD_TRANSACTIONS, A::zero()))
-                .take(next_power_of_2(n + 1) - n - 1),
+                .take((n + 1).next_power_of_two() - n - 1),
         );
     }
 
@@ -257,6 +296,10 @@ impl<A: Amount> ProofBuilder<A> {
                 given: self.transfers.len(),
                 max: MAX_NUM_OF_TRANSFERS,
             });
+        }
+
+        if self.transfers.iter().any(|(pk, _)| *pk == self.public_key) {
+            return Err(TransactionError::SelfTransfer);
         }
 
         let mut values_to_commit: Vec<u64> = self.get_transfer_values();
@@ -351,6 +394,7 @@ impl<A: Amount> ProofBuilder<A> {
                 .into_iter()
                 .zip(receiver_transactions)
                 .collect(),
+            None,
             commitments,
             proof,
         ))
@@ -407,38 +451,13 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
             sender_sk.clone(),
             original_balance.clone(),
             transfers.iter().map(Clone::clone).collect(),
+            None,
         );
         builder.create_proof_from_rng(rng)
-        // let num_of_transfers = transfers.len();
-        // if num_of_transfers == 0 {
-        //     return Err(TransactionError::EmptyTransfers);
-        // }
-        // if num_of_transfers > MAX_NUM_OF_TRANSFERS {
-        //     return Err(TransactionError::TooManyTransfers {
-        //         given: num_of_transfers,
-        //         max: MAX_NUM_OF_TRANSFERS,
-        //     });
-        // }
-        // my_debug!(num_of_transfers, transfers);
-        // let padded_transfers = &pad_transfers::<A>(transfers, sender_pk);
-        // let num_of_padded_transfers = padded_transfers.len();
-        // my_debug!(num_of_padded_transfers, padded_transfers);
-
-        // let (blindings, blinding_for_transaction_value) =
-        //     generate_transaction_random_parameters(rng, num_of_padded_transfers + 1);
-        // my_debug!(&blindings, &blinding_for_transaction_value);
-        // do_create_transaction::<Self::Amount>(
-        //     original_balance,
-        //     padded_transfers,
-        //     &blindings,
-        //     &blinding_for_transaction_value,
-        //     sender_pk,
-        //     sender_sk,
-        // )
     }
 
     fn verify_transaction(&self) -> Result<(), TransactionError> {
-        let num_of_transfers = self.num_of_transfers();
+        let num_of_transfers = self.num_of_transfers_for_verification();
         if num_of_transfers == 0 {
             return Err(TransactionError::EmptyTransfers);
         }
@@ -473,14 +492,14 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
                             &self.get_sender_final_encrypted_balance(),
                         ),
                         &self
-                            .sender_transactions()
+                            .sender_transactions_for_verification()
                             .first()
-                            .map(|t| ciphertext_points_random_term_last(t))
+                            .map(|t| ciphertext_points_random_term_last(&t))
                             .expect("Checked nonempty earlier"),
                         &self
-                            .receiver_transactions()
+                            .receiver_transactions_for_verification()
                             .first()
-                            .map(|t| ciphertext_points_random_term_last(t))
+                            .map(|t| ciphertext_points_random_term_last(&t))
                             .expect("Checked nonempty earlier"),
                     )
                     .map_err(TransactionError::BulletProofs)?
@@ -499,13 +518,13 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
                         &ciphertext_points_random_term_last(
                             &self.get_sender_final_encrypted_balance(),
                         ),
-                        self.sender_transactions()
+                        self.sender_transactions_for_verification()
                             .into_iter()
-                            .map(|t| ciphertext_points_random_term_last(t))
+                            .map(|t| ciphertext_points_random_term_last(&t))
                             .collect(),
-                        self.receiver_transactions()
+                        self.receiver_transactions_for_verification()
                             .into_iter()
-                            .map(|t| ciphertext_points_random_term_last(t))
+                            .map(|t| ciphertext_points_random_term_last(&t))
                             .collect(),
                     )
                     .map_err(TransactionError::BulletProofs)?
@@ -513,12 +532,6 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
         };
         Ok(())
     }
-}
-
-fn next_power_of_2(m: usize) -> usize {
-    let m = m as u32;
-    let n = (0..=m).find(|x| 2_u32.pow(*x) >= m).unwrap();
-    2_u32.pow(n) as usize
 }
 
 #[cfg(test)]

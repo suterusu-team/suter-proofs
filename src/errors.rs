@@ -16,6 +16,8 @@ pub enum TransactionError {
     Decryption,
     #[error("Overflow while doing arithmetic operations")]
     Overflow,
+    #[error("Attempt to send balance to oneself")]
+    SelfTransfer,
 }
 
 #[derive(Error, Debug)]
