@@ -187,6 +187,23 @@ impl<A: Amount> Transaction<A> {
             .collect()
     }
 
+    pub fn get_transfer_fee_receiver_final_encrypted_balance(
+        &self,
+        receiver_original_balance: &EncryptedBalance,
+    ) -> EncryptedBalance {
+        match self.transfer_fee {
+            Some((x, blinding)) => {
+                receiver_original_balance
+                    + new_ciphertext(
+                        &from_elgamal_ristretto_public_key(&receiver_original_balance.pk),
+                        x.into(),
+                        &blinding,
+                    )
+            }
+            None => *receiver_original_balance,
+        }
+    }
+
     /// Get a compact binary representation of the transaction.
     pub fn to_bytes(&self) -> Result<Vec<u8>, TransactionSerdeError> {
         let version = 0u8;
