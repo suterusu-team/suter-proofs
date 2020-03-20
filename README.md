@@ -1,3 +1,5 @@
+# Introduction
+
 This library currently has implemented the confidential transaction scheme.
 The support for anonymous transaction is planned.
 
@@ -22,6 +24,8 @@ commitments are not fully homomorphic. We need to tweak bulletproofs to
 support $\Sigma$-protocols, i.e. interactive proof of the values
 commited in Bulletproofs are truly the values involved in zether, whence
 we obtain a complete and sound proof of a confidential transaction.
+
+# Library Usage
 
 A confidential transaction scheme should implement the trait `confidential::ConfidentialTransaction`.
 We implemented `confidential::ConfidentialTransaction` with `confidential::Transaction`.
@@ -52,5 +56,7 @@ with `confidential::Transaction::get_receiver_final_encrypted_balance`.
 The transaction data can be serialized and deserialized with `serde::Deserialize` and `serde::Serialize`.
 To get a compact binary representation of `confidential::Transaction`, use `confidential::Transaction::to_bytes`,
 which can then be converted back to `confidential::Transaction` with `confidential::Transaction::from_bytes`.
+
+# Example
 
 For an example usage of this library, see [examples/main.rs](https://github.com/suterusu-team/suter_proofs/blob/master/examples/main.rs).
