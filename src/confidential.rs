@@ -73,6 +73,23 @@ impl<A: Amount> Transaction<A> {
         }
     }
 
+    fn verify_num_of_transfers(&self) -> Result<(), TransactionError> {
+        let num_of_transfers = self.num_of_transfers_for_verification();
+        if num_of_transfers == 0 {
+            return Err(TransactionError::EmptyTransfers);
+        }
+        if num_of_transfers + 1 != self.commitments.len() {
+            return Err(TransactionError::NumNotMatch);
+        }
+        if num_of_transfers > MAX_NUM_OF_TRANSFERS {
+            return Err(TransactionError::TooManyTransfers {
+                given: num_of_transfers,
+                max: MAX_NUM_OF_TRANSFERS,
+            });
+        }
+        Ok(())
+    }
+
     // Transactions for sender to apply
     fn sender_transactions(&self) -> Vec<EncryptedBalance> {
         self.transfers.iter().map(|(s, _r)| *s).collect()
@@ -225,17 +242,9 @@ impl<A: Amount> Transaction<A> {
         }
         let transaction: Self =
             bincode::deserialize(&slice[1..]).map_err(TransactionSerdeError::Underlying)?;
-        if transaction.transfer_fee.is_none() {
-            if transaction.transfers.is_empty()
-                || transaction.commitments.len() != transaction.transfers.len() + 1
-            {
-                return Err(TransactionSerdeError::Malformed);
-            }
-        } else {
-            if transaction.commitments.len() != transaction.transfers.len() + 2 {
-                return Err(TransactionSerdeError::Malformed);
-            }
-        }
+        transaction
+            .verify_num_of_transfers()
+            .map_err(|_| TransactionSerdeError::Malformed)?;
         Ok(transaction)
     }
 }
@@ -506,9 +515,9 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
         rng: &mut T,
     ) -> Result<Transaction<A>, TransactionError> {
         let mut builder = ProofBuilder::<A>::new(
-            sender_pk.clone(),
+            *sender_pk,
             sender_sk.clone(),
-            original_balance.clone(),
+            *original_balance,
             transfers.iter().map(Clone::clone).collect(),
             transfer_fee,
         );
@@ -516,23 +525,12 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
     }
 
     fn verify_transaction(&self) -> Result<(), TransactionError> {
-        let num_of_transfers = self.num_of_transfers_for_verification();
-        if num_of_transfers == 0 {
-            return Err(TransactionError::EmptyTransfers);
-        }
-        if num_of_transfers + 1 != self.commitments.len() {
-            return Err(TransactionError::NumNotMatch);
-        }
-        if num_of_transfers > MAX_NUM_OF_TRANSFERS {
-            return Err(TransactionError::TooManyTransfers {
-                given: num_of_transfers,
-                max: MAX_NUM_OF_TRANSFERS,
-            });
-        }
+        self.verify_num_of_transfers()?;
+
         let mut verifier_transcript = Transcript::new(MERLIN_CONFIDENTIAL_TRANSACTION_LABEL);
         match &self.proof {
             Proof::Zether(proof) => {
-                if num_of_transfers != 1 {
+                if self.num_of_transfers_for_verification() != 1 {
                     return Err(TransactionError::NumNotMatch);
                 }
                 proof
