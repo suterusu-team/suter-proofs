@@ -478,7 +478,10 @@ pub trait ConfidentialTransaction {
         transfer_fee: Option<<Self::Amount as Amount>::Target>,
         sender_pk: &PublicKey,
         sender_sk: &SecretKey,
-    ) -> Result<Transaction<Self::Amount>, TransactionError> {
+    ) -> Result<Self, TransactionError>
+    where
+        Self: std::marker::Sized,
+    {
         Self::create_transaction_with_rng(
             original_balance,
             transfers,
@@ -497,7 +500,52 @@ pub trait ConfidentialTransaction {
         sender_pk: &PublicKey,
         sender_sk: &SecretKey,
         rng: &mut T,
-    ) -> Result<Transaction<Self::Amount>, TransactionError>;
+    ) -> Result<Self, TransactionError>
+    where
+        Self: std::marker::Sized;
+
+    /// Create a new transaction which burns balance of `amount` with `rng`.
+    fn burn_balance_with_rng<T: RngCore + CryptoRng>(
+        original_balance: &EncryptedBalance,
+        amount: &<Self::Amount as Amount>::Target,
+        transfer_fee: Option<<Self::Amount as Amount>::Target>,
+        sender_pk: &PublicKey,
+        sender_sk: &SecretKey,
+        rng: &mut T,
+    ) -> Result<Self, TransactionError>
+    where
+        Self: std::marker::Sized,
+    {
+        Self::create_transaction_with_rng(
+            original_balance,
+            &[(*RANDOM_PK_TO_PAD_TRANSACTIONS, *amount)],
+            transfer_fee,
+            sender_pk,
+            sender_sk,
+            rng,
+        )
+    }
+
+    /// Create a new transaction which burns balance of `amount`.
+    fn burn_balance(
+        original_balance: &EncryptedBalance,
+        amount: &<Self::Amount as Amount>::Target,
+        transfer_fee: Option<<Self::Amount as Amount>::Target>,
+        sender_pk: &PublicKey,
+        sender_sk: &SecretKey,
+    ) -> Result<Self, TransactionError>
+    where
+        Self: std::marker::Sized,
+    {
+        Self::create_transaction_with_rng(
+            original_balance,
+            &[(*RANDOM_PK_TO_PAD_TRANSACTIONS, *amount)],
+            transfer_fee,
+            sender_pk,
+            sender_sk,
+            &mut thread_rng(),
+        )
+    }
 
     /// Verify if a transaction is valid.
     fn verify_transaction(&self) -> Result<(), TransactionError>;
