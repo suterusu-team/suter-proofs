@@ -1,5 +1,4 @@
-use crate::constants::FEE_KEYPAIR;
-use std::{iter, marker::PhantomData};
+use std::iter;
 
 use bulletproofs::{BatchZetherProof, ZetherProof};
 use curve25519_dalek::ristretto::{CompressedRistretto, RistrettoPoint};
@@ -12,7 +11,7 @@ use rand_core::{CryptoRng, RngCore};
 use serde::{Deserialize, Serialize};
 
 use crate::constants::{
-    BP_GENS, MAX_NUM_OF_TRANSFERS, MERLIN_CONFIDENTIAL_TRANSACTION_LABEL, PC_GENS,
+    BP_GENS, FEE_KEYPAIR, MAX_NUM_OF_TRANSFERS, MERLIN_CONFIDENTIAL_TRANSACTION_LABEL, PC_GENS,
     RANDOM_PK_TO_PAD_TRANSACTIONS,
 };
 use crate::crypto::{from_elgamal_ristretto_public_key, to_elgamal_ristretto_secret_key};
@@ -41,7 +40,6 @@ pub struct Transaction<A: Amount> {
     transfer_fee: Option<(<A as Amount>::Target, Scalar)>,
     commitments: Vec<CompressedRistretto>,
     proof: Proof,
-    _phantom: PhantomData<A>,
 }
 
 impl<A: Amount> Transaction<A> {
@@ -60,7 +58,6 @@ impl<A: Amount> Transaction<A> {
             transfer_fee,
             commitments,
             proof,
-            _phantom: PhantomData,
         }
     }
 
@@ -504,6 +501,10 @@ pub trait ConfidentialTransaction {
     where
         Self: std::marker::Sized;
 
+    // TODO: Like the verification of transfer fee, currently we only verify
+    // the transaction is valid, the amount is not verified yet. That is, adversary may
+    // fabricate the amount of money transferred. This is a hole to be filled.
+    // We can unify logic of burning balance and creating transfer fee, as they are identical.
     /// Create a new transaction which burns balance of `amount` with `rng`.
     fn burn_balance_with_rng<T: RngCore + CryptoRng>(
         original_balance: &EncryptedBalance,
@@ -610,7 +611,9 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
                     .map_err(TransactionError::BulletProofs)?
             }
             Proof::BatchZether(proof) => {
-                // TODO: verify the commitment for transfer fee is correct
+                // TODO: Verify the commitment for transfer fee is correct.
+                // We need to create a Zether burn proof in bulletproofs.
+                // See https://eprint.iacr.org/2019/191.pdf p41.
                 proof
                     .verify_multiple(
                         &BP_GENS,

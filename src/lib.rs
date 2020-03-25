@@ -1,4 +1,4 @@
-//! This library currently implemented only the confidential transaction scheme.
+//! This library currently implements only the confidential transaction scheme.
 //! The support for anonymous transaction is planned.
 //!
 //! A confidential transaction scheme should implement the trait [`confidential::ConfidentialTransaction`].
@@ -19,6 +19,8 @@
 //! a hint of the amount can be given with [`Amount::try_decrypt_from_with_hint`].
 //!
 //! To create a verifiable confidential transaction, we can use the method [`confidential::ConfidentialTransaction::create_transaction`],
+//! the resulting transaction can be verified with [`confidential::ConfidentialTransaction::verify_transaction`] method.
+//! To prove the sender has balance of more than amount `x`, we can use the method [`confidential::ConfidentialTransaction::burn_balance`],
 //! the resulting transaction can be verified with [`confidential::ConfidentialTransaction::verify_transaction`] method.
 //! We have implemented support for one to n confidential transaction, i.e. one sender to multiple receivers confidential transaction.
 //! To create a 1-to-n transaction, simply feed `create_transaction` with multiple receivers.
