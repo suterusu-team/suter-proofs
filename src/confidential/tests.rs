@@ -45,6 +45,130 @@ fn new_ciphertext_should_work_u64(seed: u64) {
     new_ciphertext_should_work::<u64>(seed)
 }
 
+#[quickcheck]
+fn one_to_one_transacation_balance_should_be_correct(
+    transaction_value: u32,
+    sender_initial_balance: u32,
+    receiver_initial_balance: u32,
+) -> TestResult {
+    if transaction_value > sender_initial_balance {
+        return TestResult::discard();
+    };
+
+    let sender_final_balance = &sender_initial_balance - &transaction_value;
+    let receiver_final_balance = &receiver_initial_balance + &transaction_value;
+
+    let mut csprng = OsRng;
+    let sender_sk = SecretKey::generate_with(&mut csprng);
+    let sender_pk = sender_sk.to_public();
+    let receiver_sk = SecretKey::generate_with(&mut csprng);
+    let receiver_pk = receiver_sk.to_public();
+    let sender_initial_encrypted_balance = sender_initial_balance.encrypt_with(&sender_pk);
+    let receiver_initial_encrypted_balance = receiver_initial_balance.encrypt_with(&receiver_pk);
+
+    let transaction = Transaction::<u32>::create_transaction(
+        &sender_initial_encrypted_balance,
+        &[(receiver_pk, transaction_value)],
+        None,
+        &sender_pk,
+        &sender_sk,
+    )
+    .expect("Should be able to create transaction");
+
+    assert_eq!(
+        u32::try_decrypt_from_with_hint(
+            &sender_sk,
+            &transaction.sender_transactions().first().unwrap(),
+            transaction_value
+        )
+        .unwrap(),
+        transaction_value
+    );
+    assert_eq!(
+        u32::try_decrypt_from_with_hint(
+            &receiver_sk,
+            &transaction.receiver_transactions().first().unwrap(),
+            transaction_value
+        )
+        .unwrap(),
+        transaction_value
+    );
+    assert_eq!(
+        transaction
+            .try_get_sender_final_balance_with_guess(&sender_sk, sender_final_balance)
+            .unwrap(),
+        sender_final_balance
+    );
+    assert_eq!(
+        u32::try_decrypt_from_with_hint(
+            &receiver_sk,
+            &transaction
+                .get_receiver_final_encrypted_balance(&[receiver_initial_encrypted_balance])
+                .first()
+                .unwrap(),
+            receiver_final_balance
+        )
+        .unwrap(),
+        receiver_final_balance
+    );
+    TestResult::passed()
+}
+
+#[quickcheck]
+fn burn_balance_with_incorrect_amount_should_not_work(
+    seed: u64,
+    initial_balance: u32,
+) -> TestResult {
+    let mut csprng: ChaCha20Rng = SeedableRng::seed_from_u64(seed);
+    let sender_sk = SecretKey::generate_with(&mut csprng);
+    let sender_pk = sender_sk.to_public();
+    let initial_balance_plus_1 = match initial_balance.checked_add(1) {
+        Some(b) => b,
+        None => return TestResult::discard(),
+    };
+    let initial_encrypted_balance = initial_balance.encrypt_with(&sender_pk);
+
+    Transaction::<u32>::burn_balance(
+        &initial_encrypted_balance,
+        &initial_balance_plus_1,
+        None,
+        &sender_pk,
+        &sender_sk,
+    )
+    .expect_err("Should not be able to burn this much balance");
+    TestResult::passed()
+}
+
+#[quickcheck]
+fn burn_balance_with_correct_amount_should_work(seed: u64, initial_balance: u32) -> TestResult {
+    let mut csprng: ChaCha20Rng = SeedableRng::seed_from_u64(seed);
+    let sender_sk = SecretKey::generate_with(&mut csprng);
+    let sender_pk = sender_sk.to_public();
+    let initial_balance_minus_1 = match initial_balance.checked_sub(1) {
+        Some(b) => b,
+        None => return TestResult::discard(),
+    };
+    let initial_encrypted_balance = initial_balance.encrypt_with(&sender_pk);
+
+    let transaction = Transaction::<u32>::burn_balance(
+        &initial_encrypted_balance,
+        &initial_balance_minus_1,
+        None,
+        &sender_pk,
+        &sender_sk,
+    )
+    .expect("Should be able to burn balance");
+
+    assert!(transaction.verify_transaction().is_ok());
+    assert_eq!(
+        transaction
+            .try_get_sender_final_balance(&sender_sk)
+            .unwrap(),
+        1
+    );
+    TestResult::passed()
+}
+
 // Deterministically generate transacation parameters
 fn do_setup_from_seed_and_num_of_transfers<T>(
     seed: u64,
@@ -782,75 +906,6 @@ fn create_and_verify_one_to_n_transaction_with_fee_u32(seed: u64, n: u8) -> Test
 #[quickcheck]
 fn create_and_verify_one_to_n_transaction_with_fee_u64(seed: u64, n: u8) -> TestResult {
     create_and_verify_one_to_n_transaction_with_fee::<u64>(seed, n)
-}
-
-#[quickcheck]
-fn one_to_one_transacation_balance_should_be_correct(
-    transaction_value: u32,
-    sender_initial_balance: u32,
-    receiver_initial_balance: u32,
-) -> TestResult {
-    if transaction_value > sender_initial_balance {
-        return TestResult::discard();
-    };
-
-    let sender_final_balance = &sender_initial_balance - &transaction_value;
-    let receiver_final_balance = &receiver_initial_balance + &transaction_value;
-
-    let mut csprng = OsRng;
-    let sender_sk = SecretKey::generate_with(&mut csprng);
-    let sender_pk = sender_sk.to_public();
-    let receiver_sk = SecretKey::generate_with(&mut csprng);
-    let receiver_pk = receiver_sk.to_public();
-    let sender_initial_encrypted_balance = sender_initial_balance.encrypt_with(&sender_pk);
-    let receiver_initial_encrypted_balance = receiver_initial_balance.encrypt_with(&receiver_pk);
-
-    let transaction = Transaction::<u32>::create_transaction(
-        &sender_initial_encrypted_balance,
-        &[(receiver_pk, transaction_value)],
-        None,
-        &sender_pk,
-        &sender_sk,
-    )
-    .expect("Should be able to create transaction");
-
-    assert_eq!(
-        u32::try_decrypt_from_with_hint(
-            &sender_sk,
-            &transaction.sender_transactions().first().unwrap(),
-            transaction_value
-        )
-        .unwrap(),
-        transaction_value
-    );
-    assert_eq!(
-        u32::try_decrypt_from_with_hint(
-            &receiver_sk,
-            &transaction.receiver_transactions().first().unwrap(),
-            transaction_value
-        )
-        .unwrap(),
-        transaction_value
-    );
-    assert_eq!(
-        transaction
-            .try_get_sender_final_balance_with_guess(&sender_sk, sender_final_balance)
-            .unwrap(),
-        sender_final_balance
-    );
-    assert_eq!(
-        u32::try_decrypt_from_with_hint(
-            &receiver_sk,
-            &transaction
-                .get_receiver_final_encrypted_balance(&[receiver_initial_encrypted_balance])
-                .first()
-                .unwrap(),
-            receiver_final_balance
-        )
-        .unwrap(),
-        receiver_final_balance
-    );
-    TestResult::passed()
 }
 
 fn one_to_n_transacation_balance_should_be_correct<T>(seed: u64, n: u8) -> TestResult
