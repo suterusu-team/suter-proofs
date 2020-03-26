@@ -8,8 +8,9 @@ use num::{CheckedAdd, CheckedSub, Integer, Zero};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::constants::BASE_POINT;
-use crate::crypto::{to_elgamal_ristretto_public_key, to_elgamal_ristretto_secret_key};
-use crate::utils::new_ciphertext;
+use crate::crypto::{
+    new_ciphertext, to_elgamal_ristretto_public_key, to_elgamal_ristretto_secret_key,
+};
 use crate::{EncryptedBalance, PublicKey, SecretKey};
 
 /// Represents some amount of type {u8,u16,u32,u64} which can be encrypted and decrypted.
