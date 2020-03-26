@@ -54,4 +54,3 @@ mod errors;
 pub use errors::{TransactionError, TransactionSerdeError};
 pub mod crypto;
 pub use crypto::{Ciphertext, EncryptedBalance, PublicKey, Scalar, SecretKey};
-pub(crate) mod utils;

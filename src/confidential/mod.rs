@@ -14,8 +14,10 @@ use crate::constants::{
     BP_GENS, FEE_KEYPAIR, MAX_NUM_OF_TRANSFERS, MERLIN_CONFIDENTIAL_TRANSACTION_LABEL, PC_GENS,
     RANDOM_PK_TO_PAD_TRANSACTIONS,
 };
-use crate::crypto::{from_elgamal_ristretto_public_key, to_elgamal_ristretto_secret_key};
-use crate::utils::{ciphertext_points_random_term_last, new_ciphertext};
+use crate::crypto::{
+    ciphertext_points_random_term_last, from_elgamal_ristretto_public_key, new_ciphertext,
+    to_elgamal_ristretto_secret_key,
+};
 use crate::{
     Amount, EncryptedBalance, PublicKey, SecretKey, TransactionError, TransactionSerdeError,
 };
