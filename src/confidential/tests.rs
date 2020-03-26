@@ -19,10 +19,8 @@ where
     let pk = sk.to_public();
     let value = Rng::gen::<T>(&mut csprng);
     let blinding = Scalar::random(&mut csprng);
-    let ciphertext = new_ciphertext(&pk, value.to_u64(), &blinding);
-    assert!(
-        T::try_decrypt_from_with_hint(&sk, &ciphertext, value.inner()).unwrap() == value.inner()
-    )
+    let ciphertext = new_ciphertext(pk, value.to_u64(), blinding);
+    assert!(T::try_decrypt_from_with_hint(&sk, ciphertext, value.inner()).unwrap() == value.inner())
 }
 
 #[quickcheck]
@@ -63,14 +61,14 @@ fn one_to_one_transacation_balance_should_be_correct(
     let sender_pk = sender_sk.to_public();
     let receiver_sk = SecretKey::generate_with(&mut csprng);
     let receiver_pk = receiver_sk.to_public();
-    let sender_initial_encrypted_balance = sender_initial_balance.encrypt_with(&sender_pk);
-    let receiver_initial_encrypted_balance = receiver_initial_balance.encrypt_with(&receiver_pk);
+    let sender_initial_encrypted_balance = sender_initial_balance.encrypt_with(sender_pk);
+    let receiver_initial_encrypted_balance = receiver_initial_balance.encrypt_with(receiver_pk);
 
     let transaction = Transaction::<u32>::create_transaction(
         &sender_initial_encrypted_balance,
         &[(receiver_pk, transaction_value)],
         None,
-        &sender_pk,
+        sender_pk,
         &sender_sk,
     )
     .expect("Should be able to create transaction");
@@ -78,7 +76,7 @@ fn one_to_one_transacation_balance_should_be_correct(
     assert_eq!(
         u32::try_decrypt_from_with_hint(
             &sender_sk,
-            &transaction.sender_transactions().first().unwrap(),
+            *transaction.sender_transactions().first().unwrap(),
             transaction_value
         )
         .unwrap(),
@@ -87,7 +85,7 @@ fn one_to_one_transacation_balance_should_be_correct(
     assert_eq!(
         u32::try_decrypt_from_with_hint(
             &receiver_sk,
-            &transaction.receiver_transactions().first().unwrap(),
+            *transaction.receiver_transactions().first().unwrap(),
             transaction_value
         )
         .unwrap(),
@@ -102,7 +100,7 @@ fn one_to_one_transacation_balance_should_be_correct(
     assert_eq!(
         u32::try_decrypt_from_with_hint(
             &receiver_sk,
-            &transaction
+            *transaction
                 .get_receiver_final_encrypted_balance(&[receiver_initial_encrypted_balance])
                 .first()
                 .unwrap(),
@@ -126,13 +124,13 @@ fn burn_balance_with_incorrect_amount_should_not_work(
         Some(b) => b,
         None => return TestResult::discard(),
     };
-    let initial_encrypted_balance = initial_balance.encrypt_with(&sender_pk);
+    let initial_encrypted_balance = initial_balance.encrypt_with(sender_pk);
 
     Transaction::<u32>::burn_balance(
         &initial_encrypted_balance,
         &initial_balance_plus_1,
         None,
-        &sender_pk,
+        sender_pk,
         &sender_sk,
     )
     .expect_err("Should not be able to burn this much balance");
@@ -148,13 +146,13 @@ fn burn_balance_with_correct_amount_should_work(seed: u64, initial_balance: u32)
         Some(b) => b,
         None => return TestResult::discard(),
     };
-    let initial_encrypted_balance = initial_balance.encrypt_with(&sender_pk);
+    let initial_encrypted_balance = initial_balance.encrypt_with(sender_pk);
 
     let transaction = Transaction::<u32>::burn_balance(
         &initial_encrypted_balance,
         &initial_balance_minus_1,
         None,
-        &sender_pk,
+        sender_pk,
         &sender_sk,
     )
     .expect("Should be able to burn balance");
@@ -228,19 +226,16 @@ where
             let receiver_initial_balance = T::from(Rng::gen::<u16>(&mut csprng));
             let receiver_initial_balance_blinding = Scalar::random(&mut csprng);
             let receiver_initial_encrypted_balance = new_ciphertext(
-                &receiver_pk,
+                receiver_pk,
                 receiver_initial_balance.to_u64(),
-                &receiver_initial_balance_blinding,
+                receiver_initial_balance_blinding,
             );
-            let sender_transaction = new_ciphertext(
-                &sender_pk,
-                transaction_value.to_u64(),
-                &transaction_blinding,
-            );
+            let sender_transaction =
+                new_ciphertext(sender_pk, transaction_value.to_u64(), transaction_blinding);
             let receiver_transaction = new_ciphertext(
-                &receiver_pk,
+                receiver_pk,
                 transaction_value.to_u64(),
-                &transaction_blinding,
+                transaction_blinding,
             );
             (
                 receiver_sk,
@@ -267,9 +262,9 @@ where
     };
     let sender_initial_balance_blinding = Scalar::random(&mut csprng);
     let sender_initial_encrypted_balance = new_ciphertext(
-        &sender_pk,
+        sender_pk,
         sender_initial_balance.to_u64(),
-        &sender_initial_balance_blinding,
+        sender_initial_balance_blinding,
     );
     return Some((
         csprng,
@@ -471,7 +466,7 @@ where
                 &sender_initial_encrypted_balance,
                 &[],
                 Some(transaction_value.inner()),
-                &sender_pk,
+                sender_pk,
                 &sender_sk,
                 &mut csprng,
             )
@@ -554,7 +549,7 @@ where
                 &sender_initial_encrypted_balance,
                 &[(receiver_pk, transaction_value.inner())],
                 None,
-                &sender_pk,
+                sender_pk,
                 &sender_sk,
                 &mut csprng,
             )
@@ -657,7 +652,7 @@ where
                 &sender_initial_encrypted_balance,
                 &[(receiver_pk, transaction_value.inner())],
                 Some(transfer_fee.inner()),
-                &sender_pk,
+                sender_pk,
                 &sender_sk,
                 &mut csprng,
             )
@@ -751,7 +746,7 @@ where
                 &sender_initial_encrypted_balance,
                 &transfers,
                 None,
-                &sender_pk,
+                sender_pk,
                 &sender_sk,
                 &mut csprng,
             )
@@ -844,7 +839,7 @@ where
                 &sender_initial_encrypted_balance,
                 &transfers,
                 None,
-                &sender_pk,
+                sender_pk,
                 &sender_sk,
                 &mut csprng,
             )
@@ -940,7 +935,7 @@ where
                 &sender_initial_encrypted_balance,
                 &transfers[..],
                 None,
-                &sender_pk,
+                sender_pk,
                 &sender_sk,
                 &mut csprng,
             )
@@ -979,7 +974,7 @@ where
                     Some(b) => assert_eq!(
                         T::try_decrypt_from_with_hint(
                             &receiver_sk,
-                            &receiver_final_encrypted_balance,
+                            receiver_final_encrypted_balance,
                             b.inner()
                         )
                         .unwrap(),

@@ -97,11 +97,7 @@ impl<A: Amount> Transaction<A> {
     fn sender_fee_transaction(&self) -> Option<EncryptedBalance> {
         self.transfer_fee
             .map(|(fee, blinding_for_transaction_value)| {
-                new_ciphertext(
-                    &self.sender_pk(),
-                    fee.into(),
-                    &blinding_for_transaction_value,
-                )
+                new_ciphertext(self.sender_pk(), fee.into(), blinding_for_transaction_value)
             })
     }
 
@@ -116,7 +112,7 @@ impl<A: Amount> Transaction<A> {
 
     /// Get the public key of sender
     pub fn sender_pk(&self) -> PublicKey {
-        from_elgamal_ristretto_public_key(&self.original_balance.pk)
+        from_elgamal_ristretto_public_key(self.original_balance.pk)
     }
 
     fn sender_pk_point(&self) -> RistrettoPoint {
@@ -128,15 +124,15 @@ impl<A: Amount> Transaction<A> {
         self.transfers.iter().map(|(_s, r)| *r).collect()
     }
 
-    fn receiver_fee_transaction(&self, receiver_pk: &PublicKey) -> Option<EncryptedBalance> {
+    fn receiver_fee_transaction(&self, receiver_pk: PublicKey) -> Option<EncryptedBalance> {
         self.transfer_fee
             .map(|(fee, blinding_for_transaction_value)| {
-                new_ciphertext(&receiver_pk, fee.into(), &blinding_for_transaction_value)
+                new_ciphertext(receiver_pk, fee.into(), blinding_for_transaction_value)
             })
     }
 
     fn receiver_transactions_for_verification(&self) -> Vec<EncryptedBalance> {
-        match self.receiver_fee_transaction(&pk_for_fee()) {
+        match self.receiver_fee_transaction(pk_for_fee()) {
             Some(fee_transaction) => iter::once(fee_transaction)
                 .chain(self.receiver_transactions())
                 .collect(),
@@ -148,7 +144,7 @@ impl<A: Amount> Transaction<A> {
     pub fn receiver_pks(&self) -> Vec<PublicKey> {
         self.transfers
             .iter()
-            .map(|(_s, r)| from_elgamal_ristretto_public_key(&r.pk))
+            .map(|(_s, r)| from_elgamal_ristretto_public_key(r.pk))
             .collect()
     }
 
@@ -178,7 +174,7 @@ impl<A: Amount> Transaction<A> {
 
     /// Get the final balance of sender after transaction is applied
     pub fn try_get_sender_final_balance(&self, sk: &SecretKey) -> Option<<A as Amount>::Target> {
-        A::try_decrypt_from(sk, &self.get_sender_final_encrypted_balance())
+        A::try_decrypt_from(sk, self.get_sender_final_encrypted_balance())
     }
 
     /// Get the final balance of sender after transaction is applied
@@ -187,7 +183,7 @@ impl<A: Amount> Transaction<A> {
         sk: &SecretKey,
         guess: <A as Amount>::Target,
     ) -> Option<<A as Amount>::Target> {
-        A::try_decrypt_from_with_hint(sk, &self.get_sender_final_encrypted_balance(), guess)
+        A::try_decrypt_from_with_hint(sk, self.get_sender_final_encrypted_balance(), guess)
     }
 
     /// Get the final balance of receivers after transaction is applied to receiver_original_balance.
@@ -211,9 +207,9 @@ impl<A: Amount> Transaction<A> {
             Some((x, blinding)) => {
                 receiver_original_balance
                     + new_ciphertext(
-                        &from_elgamal_ristretto_public_key(&receiver_original_balance.pk),
+                        from_elgamal_ristretto_public_key(receiver_original_balance.pk),
                         x.into(),
-                        &blinding,
+                        blinding,
                     )
             }
             None => *receiver_original_balance,
@@ -353,7 +349,7 @@ impl<A: Amount> ProofBuilder<A> {
 
         let mut values_to_commit: Vec<u64> = self.get_transfer_values();
         let sender_initial_balance: A::Target =
-            A::try_decrypt_from(&self.secret_key, &self.original_balance)
+            A::try_decrypt_from(&self.secret_key, self.original_balance)
                 .ok_or(TransactionError::Decryption)?;
         let sender_final_balance: <A as Amount>::Target = self
             .transfers
@@ -372,9 +368,9 @@ impl<A: Amount> ProofBuilder<A> {
             .iter()
             .map(|(_, v)| {
                 new_ciphertext(
-                    &self.public_key,
+                    self.public_key,
                     Into::<u64>::into(*v),
-                    blinding_for_transaction_value,
+                    *blinding_for_transaction_value,
                 )
             })
             .collect();
@@ -382,7 +378,7 @@ impl<A: Amount> ProofBuilder<A> {
             .transfers
             .iter()
             .map(|(pk, v)| {
-                new_ciphertext(pk, Into::<u64>::into(*v), blinding_for_transaction_value)
+                new_ciphertext(*pk, Into::<u64>::into(*v), *blinding_for_transaction_value)
             })
             .collect();
         let sender_final_encrypted_balance = sender_transactions
@@ -403,10 +399,10 @@ impl<A: Amount> ProofBuilder<A> {
                     .first()
                     .expect("Checked nonempty earlier")
                     .as_point(),
-                &ciphertext_points_random_term_last(&sender_final_encrypted_balance),
+                &ciphertext_points_random_term_last(sender_final_encrypted_balance),
                 &sender_transactions
                     .first()
-                    .map(|t| ciphertext_points_random_term_last(t))
+                    .map(|t| ciphertext_points_random_term_last(*t))
                     .expect("Checked nonempty earlier"),
                 &to_elgamal_ristretto_secret_key(&self.secret_key).get_scalar(),
                 blinding_for_transaction_value,
@@ -423,10 +419,10 @@ impl<A: Amount> ProofBuilder<A> {
                 A::bit_size(),
                 self.public_key.as_point(),
                 &receiver_pks.iter().map(|pk| pk.into_point()).collect(),
-                &ciphertext_points_random_term_last(&sender_final_encrypted_balance),
+                &ciphertext_points_random_term_last(sender_final_encrypted_balance),
                 sender_transactions
                     .iter()
-                    .map(|t| ciphertext_points_random_term_last(t))
+                    .map(|t| ciphertext_points_random_term_last(*t))
                     .collect(),
                 &to_elgamal_ristretto_secret_key(&self.secret_key).get_scalar(),
                 &blinding_for_transaction_value,
@@ -475,7 +471,7 @@ pub trait ConfidentialTransaction {
         original_balance: &EncryptedBalance,
         transfers: &[(PublicKey, <Self::Amount as Amount>::Target)],
         transfer_fee: Option<<Self::Amount as Amount>::Target>,
-        sender_pk: &PublicKey,
+        sender_pk: PublicKey,
         sender_sk: &SecretKey,
     ) -> Result<Self, TransactionError>
     where
@@ -496,7 +492,7 @@ pub trait ConfidentialTransaction {
         original_balance: &EncryptedBalance,
         transfers: &[(PublicKey, <Self::Amount as Amount>::Target)],
         transfer_fee: Option<<Self::Amount as Amount>::Target>,
-        sender_pk: &PublicKey,
+        sender_pk: PublicKey,
         sender_sk: &SecretKey,
         rng: &mut T,
     ) -> Result<Self, TransactionError>
@@ -512,7 +508,7 @@ pub trait ConfidentialTransaction {
         original_balance: &EncryptedBalance,
         amount: &<Self::Amount as Amount>::Target,
         transfer_fee: Option<<Self::Amount as Amount>::Target>,
-        sender_pk: &PublicKey,
+        sender_pk: PublicKey,
         sender_sk: &SecretKey,
         rng: &mut T,
     ) -> Result<Self, TransactionError>
@@ -534,7 +530,7 @@ pub trait ConfidentialTransaction {
         original_balance: &EncryptedBalance,
         amount: &<Self::Amount as Amount>::Target,
         transfer_fee: Option<<Self::Amount as Amount>::Target>,
-        sender_pk: &PublicKey,
+        sender_pk: PublicKey,
         sender_sk: &SecretKey,
     ) -> Result<Self, TransactionError>
     where
@@ -561,12 +557,12 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
         original_balance: &EncryptedBalance,
         transfers: &[(PublicKey, <Self::Amount as Amount>::Target)],
         transfer_fee: Option<<Self::Amount as Amount>::Target>,
-        sender_pk: &PublicKey,
+        sender_pk: PublicKey,
         sender_sk: &SecretKey,
         rng: &mut T,
     ) -> Result<Transaction<A>, TransactionError> {
         let mut builder = ProofBuilder::<A>::new(
-            *sender_pk,
+            sender_pk,
             sender_sk.clone(),
             *original_balance,
             transfers.iter().map(Clone::clone).collect(),
@@ -597,17 +593,17 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
                             .first()
                             .expect("Checked nonempty earlier"),
                         &ciphertext_points_random_term_last(
-                            &self.get_sender_final_encrypted_balance(),
+                            self.get_sender_final_encrypted_balance(),
                         ),
                         &self
                             .sender_transactions_for_verification()
                             .first()
-                            .map(|t| ciphertext_points_random_term_last(&t))
+                            .map(|t| ciphertext_points_random_term_last(*t))
                             .expect("Checked nonempty earlier"),
                         &self
                             .receiver_transactions_for_verification()
                             .first()
-                            .map(|t| ciphertext_points_random_term_last(&t))
+                            .map(|t| ciphertext_points_random_term_last(*t))
                             .expect("Checked nonempty earlier"),
                     )
                     .map_err(TransactionError::BulletProofs)?
@@ -626,15 +622,15 @@ impl<A: Amount> ConfidentialTransaction for Transaction<A> {
                         &self.sender_pk_point(),
                         &self.receiver_pks_for_verification_points(),
                         &ciphertext_points_random_term_last(
-                            &self.get_sender_final_encrypted_balance(),
+                            self.get_sender_final_encrypted_balance(),
                         ),
                         self.sender_transactions_for_verification()
                             .into_iter()
-                            .map(|t| ciphertext_points_random_term_last(&t))
+                            .map(ciphertext_points_random_term_last)
                             .collect(),
                         self.receiver_transactions_for_verification()
                             .into_iter()
-                            .map(|t| ciphertext_points_random_term_last(&t))
+                            .map(ciphertext_points_random_term_last)
                             .collect(),
                     )
                     .map_err(TransactionError::BulletProofs)?

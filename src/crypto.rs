@@ -18,11 +18,11 @@ pub(crate) fn to_elgamal_ristretto_secret_key(sk: &SecretKey) -> ERSecretKey {
         .into()
 }
 
-pub(crate) fn to_elgamal_ristretto_public_key(pk: &PublicKey) -> ERPublicKey {
+pub(crate) fn to_elgamal_ristretto_public_key(pk: PublicKey) -> ERPublicKey {
     ERPublicKey::from(*pk.as_point())
 }
 
-pub(crate) fn from_elgamal_ristretto_public_key(pk: &ERPublicKey) -> PublicKey {
+pub(crate) fn from_elgamal_ristretto_public_key(pk: ERPublicKey) -> PublicKey {
     PublicKey::from_point(pk.get_point())
 }
 
@@ -42,9 +42,9 @@ impl RistrettoPointTuple {
     pub(crate) fn random_term_last(&self) -> (RistrettoPoint, RistrettoPoint) {
         ((*self).payload_term, (*self).random_term)
     }
-    pub(crate) fn ciphertext_for(&self, pk: &ERPublicKey) -> EncryptedBalance {
+    pub(crate) fn ciphertext_for(&self, pk: ERPublicKey) -> EncryptedBalance {
         EncryptedBalance {
-            pk: *pk,
+            pk,
             points: self.random_term_first(),
         }
     }
@@ -62,25 +62,25 @@ impl<'a> From<&'a EncryptedBalance> for RistrettoPointTuple {
 
 #[allow(dead_code)]
 pub(crate) fn ciphertext_points_random_term_first(
-    ciphertext: &EncryptedBalance,
+    ciphertext: EncryptedBalance,
 ) -> (RistrettoPoint, RistrettoPoint) {
-    RistrettoPointTuple::from(ciphertext).random_term_first()
+    RistrettoPointTuple::from(&ciphertext).random_term_first()
 }
 
 pub(crate) fn ciphertext_points_random_term_last(
-    ciphertext: &EncryptedBalance,
+    ciphertext: EncryptedBalance,
 ) -> (RistrettoPoint, RistrettoPoint) {
-    RistrettoPointTuple::from(ciphertext).random_term_last()
+    RistrettoPointTuple::from(&ciphertext).random_term_last()
 }
 
 // Create a ciphertext with the specified plain value and random scalar.
-pub(crate) fn new_ciphertext(pk: &PublicKey, value: u64, blinding: &Scalar) -> EncryptedBalance {
+pub(crate) fn new_ciphertext(pk: PublicKey, value: u64, blinding: Scalar) -> EncryptedBalance {
     let pk = to_elgamal_ristretto_public_key(pk);
     let tuple = RistrettoPointTuple {
         random_term: blinding * BASE_POINT,
         payload_term: Scalar::from(value) * BASE_POINT + blinding * pk.get_point(),
     };
-    tuple.ciphertext_for(&pk)
+    tuple.ciphertext_for(pk)
 }
 
 #[cfg(test)]
