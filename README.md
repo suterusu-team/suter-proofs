@@ -57,6 +57,6 @@ The transaction data can be serialized and deserialized with `serde::Deserialize
 To get a compact binary representation of `confidential::Transaction`, use `confidential::Transaction::to_bytes`,
 which can then be converted back to `confidential::Transaction` with `confidential::Transaction::from_bytes`.
 
-# Example
+# Examples
 
 For an example usage of this library, see [examples/main.rs](https://github.com/suterusu-team/suter_proofs/blob/master/examples/main.rs).

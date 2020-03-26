@@ -52,12 +52,12 @@ pub trait Amount: Sized + private::Sealed + DeserializeOwned + Serialize + std::
     }
 
     /// Mint encrypted balance from this amount.
-    fn mint(&self, pk: &PublicKey) -> EncryptedBalance {
-        new_ciphertext(pk, self.to_u64(), &0u64.into())
+    fn mint(&self, pk: PublicKey) -> EncryptedBalance {
+        new_ciphertext(pk, self.to_u64(), 0u64.into())
     }
 
     /// Verify the encrypted balance is minted from this amount.
-    fn verify_minted_amount(&self, pk: &PublicKey, encrypted_balance: EncryptedBalance) -> bool {
+    fn verify_minted_amount(&self, pk: PublicKey, encrypted_balance: EncryptedBalance) -> bool {
         encrypted_balance == self.mint(pk)
     }
 
@@ -65,13 +65,13 @@ pub trait Amount: Sized + private::Sealed + DeserializeOwned + Serialize + std::
     // This makes ElGamal encryption additively homomorphic.
     // See also zether paper https://eprint.iacr.org/2019/191.pdf
     /// Encrypt the amount with the provide public key.
-    fn encrypt_with(&self, pk: &PublicKey) -> EncryptedBalance {
+    fn encrypt_with(&self, pk: PublicKey) -> EncryptedBalance {
         let pk = to_elgamal_ristretto_public_key(pk);
         pk.encrypt(&self.to_point())
     }
 
     /// Get the decrypted point in the Ristretto group.
-    fn get_decrypted_point(sk: &SecretKey, ciphertext: &EncryptedBalance) -> RistrettoPoint {
+    fn get_decrypted_point(sk: &SecretKey, ciphertext: EncryptedBalance) -> RistrettoPoint {
         let sk = to_elgamal_ristretto_secret_key(sk);
         sk.decrypt(&ciphertext)
     }
@@ -81,7 +81,7 @@ pub trait Amount: Sized + private::Sealed + DeserializeOwned + Serialize + std::
     /// Converting Ristretto point to an amount may fail.
     fn try_decrypt_from(
         sk: &SecretKey,
-        ciphertext: &EncryptedBalance,
+        ciphertext: EncryptedBalance,
     ) -> Option<<Self as Amount>::Target>;
 
     /// Accelerate try_decrypt_from with a hint. If the guessed amount is the amount
@@ -89,7 +89,7 @@ pub trait Amount: Sized + private::Sealed + DeserializeOwned + Serialize + std::
     /// This function is otherwise the same as try_decrypt_from.
     fn try_decrypt_from_with_hint(
         sk: &SecretKey,
-        ciphertext: &EncryptedBalance,
+        ciphertext: EncryptedBalance,
         hint: <Self as Amount>::Target,
     ) -> Option<<Self as Amount>::Target> {
         if Self::new(hint).to_point() == Self::get_decrypted_point(sk, ciphertext) {
@@ -131,7 +131,7 @@ macro_rules! impl_amount {
 
             fn try_decrypt_from(
                 sk: &SecretKey,
-                ciphertext: &EncryptedBalance,
+                ciphertext: EncryptedBalance,
             ) -> Option<<Self as Amount>::Target> {
                 let point = Self::get_decrypted_point(sk, ciphertext);
                 let mut acc: RistrettoPoint = Identity::identity();
@@ -146,7 +146,7 @@ macro_rules! impl_amount {
 
             fn try_decrypt_from_with_hint(
                 sk: &SecretKey,
-                ciphertext: &EncryptedBalance,
+                ciphertext: EncryptedBalance,
                 hint: <Self as Amount>::Target,
             ) -> Option<<Self as Amount>::Target> {
                 let guessed_point = Self::new(hint).to_point();
@@ -195,20 +195,33 @@ mod tests {
         let mut csprng = OsRng;
         let sk = SecretKey::generate_with(&mut csprng);
         let pk = sk.to_public();
-        u32::try_decrypt_from(&sk, &x.encrypt_with(&pk))
+        u32::try_decrypt_from(&sk, x.encrypt_with(pk))
+    }
+
+    fn randomly_mint_and_decrypt(x: u32) -> Option<u32> {
+        let mut csprng = OsRng;
+        let sk = SecretKey::generate_with(&mut csprng);
+        let pk = sk.to_public();
+        u32::try_decrypt_from(&sk, x.mint(pk))
     }
 
     fn randomly_encrypt_and_decrypt_with_random_hint(x: u32, hint: u32) -> Option<u32> {
         let mut csprng = OsRng;
         let sk = SecretKey::generate_with(&mut csprng);
         let pk = sk.to_public();
-        u32::try_decrypt_from_with_hint(&sk, &x.encrypt_with(&pk), hint)
+        u32::try_decrypt_from_with_hint(&sk, x.encrypt_with(pk), hint)
     }
 
     #[quickcheck]
     fn encrypt_and_decrypt_should_be_identity(xs: Vec<u32>) -> bool {
         xs.into_iter()
             .all(|x| x == randomly_encrypt_and_decrypt(x).unwrap())
+    }
+
+    #[quickcheck]
+    fn mint_and_decrypt_should_be_identity(xs: Vec<u32>) -> bool {
+        xs.into_iter()
+            .all(|x| x == randomly_mint_and_decrypt(x).unwrap())
     }
 
     #[quickcheck]

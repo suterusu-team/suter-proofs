@@ -16,7 +16,7 @@ fn main() {
             let receiver_sk = SecretKey::generate_with(&mut csprng);
             let receiver_pk = receiver_sk.to_public();
             let receiver_initial_encrypted_balance =
-                receiver_initial_balance.encrypt_with(&receiver_pk);
+                receiver_initial_balance.encrypt_with(receiver_pk);
             (
                 receiver_sk,
                 receiver_pk,
@@ -28,7 +28,7 @@ fn main() {
     let sender_final_balance = 10000u64;
     let transferred: u64 = transaction_values.iter().sum();
     let sender_initial_balance: u64 = sender_final_balance + transferred;
-    let sender_initial_encrypted_balance = sender_initial_balance.encrypt_with(&sender_pk);
+    let sender_initial_encrypted_balance = sender_initial_balance.encrypt_with(sender_pk);
     let transfers: Vec<(PublicKey, u64)> = receivers_info
         .iter()
         .map(|x| (x.1))
@@ -38,7 +38,7 @@ fn main() {
         &sender_initial_encrypted_balance,
         &transfers,
         None,
-        &sender_pk,
+        sender_pk,
         &sender_sk,
     )
     .expect("Should be able to create transaction");
@@ -55,7 +55,7 @@ fn main() {
     for (i, sk) in receivers_info.iter().map(|x| (&x.0)).enumerate() {
         assert_eq!(
             receivers_info[i].2 + &transaction_values[i],
-            u64::try_decrypt_from(sk, &receiver_final_encrypted_balances[i]).unwrap()
+            u64::try_decrypt_from(sk, receiver_final_encrypted_balances[i]).unwrap()
         )
     }
 }
