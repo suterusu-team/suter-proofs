@@ -9,6 +9,7 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::constants::BASE_POINT;
 use crate::crypto::{to_elgamal_ristretto_public_key, to_elgamal_ristretto_secret_key};
+use crate::utils::new_ciphertext;
 use crate::{EncryptedBalance, PublicKey, SecretKey};
 
 /// Represents some amount of type {u8,u16,u32,u64} which can be encrypted and decrypted.
@@ -47,6 +48,16 @@ pub trait Amount: Sized + private::Sealed + DeserializeOwned + Serialize + std::
     /// Convert the amount to a point of the Ristretto group.
     fn to_point(&self) -> RistrettoPoint {
         Scalar::from(self.to_u64()) * BASE_POINT
+    }
+
+    /// Mint encrypted balance from this amount.
+    fn mint(&self, pk: &PublicKey) -> EncryptedBalance {
+        new_ciphertext(pk, self.to_u64(), &0u64.into())
+    }
+
+    /// Verify the encrypted balance is minted from this amount.
+    fn verify_minted_amount(&self, pk: &PublicKey, encrypted_balance: EncryptedBalance) -> bool {
+        encrypted_balance == self.mint(pk)
     }
 
     // Elgamal encryption with balances raised from base point.
